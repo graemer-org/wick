@@ -63,8 +63,16 @@ function blockFor(event: HookEvent): string {
       break;
     case "pre-push":
       // Push the wick notes ref alongside. --no-verify avoids recursing into
-      // this very hook; failures never block the push.
-      body = `[ -n "$1" ] && git push --no-verify "$1" ${NOTES_REF} >/dev/null 2>&1 || true`;
+      // this very hook; failures never block the push. Skip when the push
+      // already includes the notes ref itself — pushing it again from inside
+      // the hook races the outer push on the same ref lock.
+      body = [
+        `WICK_PUSH_REFS="$(cat)"`,
+        `case "$WICK_PUSH_REFS" in`,
+        `  *"${NOTES_REF}"*) ;;`,
+        `  *) [ -n "$1" ] && git push --no-verify "$1" ${NOTES_REF} >/dev/null 2>&1 || true ;;`,
+        `esac`,
+      ].join("\n");
       break;
   }
   return `${BEGIN}\n${body}\n${END}`;
