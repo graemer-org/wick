@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "Measure AI token costs per git commit and aggregate them per Pull Request",
   "author": "Patrick Grämer <5955669+pgraemer@users.noreply.github.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/graemer-org/wick.git"
+  },
   "type": "module",
   "bin": {
     "wick": "./dist/cli.js"
