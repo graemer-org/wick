@@ -86,11 +86,15 @@ export function computeDelta(
           ...delta,
         });
       }
+      // Baselines are monotonic: a transcript read that races with the
+      // provider rewriting the file (or a truncated file) can report totals
+      // BELOW what was already stamped. Lowering the baseline would make the
+      // next stamp double-count those tokens, so we only ever raise it.
       nextBaseline[m.model] = {
-        input: m.input,
-        cacheRead: m.cacheRead,
-        cacheWrite: m.cacheWrite,
-        output: m.output,
+        input: Math.max(prior.input, m.input),
+        cacheRead: Math.max(prior.cacheRead, m.cacheRead),
+        cacheWrite: Math.max(prior.cacheWrite, m.cacheWrite),
+        output: Math.max(prior.output, m.output),
       };
     }
     newSessions[key] = nextBaseline;

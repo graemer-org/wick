@@ -86,6 +86,17 @@ describe("computeDelta", () => {
     const second = computeDelta([usage("s1", "m", { output: 50 })], first.newState);
     expect(second.stamps).toEqual([]);
   });
+
+  it("never lowers baselines on a shrunken read, so already-stamped tokens are not re-stamped", () => {
+    const first = computeDelta([usage("s1", "m", { output: 100 })], emptyState());
+    // A read racing with the provider rewriting the transcript reports less.
+    const second = computeDelta([usage("s1", "m", { output: 40 })], first.newState);
+    expect(second.stamps).toEqual([]);
+    // The file recovers; only genuinely new tokens are stamped.
+    const third = computeDelta([usage("s1", "m", { output: 120 })], second.newState);
+    expect(third.stamps).toHaveLength(1);
+    expect(third.stamps[0].output).toBe(20);
+  });
 });
 
 describe("mergeNotes", () => {
