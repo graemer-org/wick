@@ -31,12 +31,28 @@ const t = report.totals;
 const total =
   t.tokens.input + t.tokens.cacheRead + t.tokens.cacheWrite + t.tokens.output;
 const cost = t.costUsd === null ? "n/a" : `$${t.costUsd.toFixed(2)}`;
+function fmtCost(c) {
+  return c === null ? "n/a" : `$${c.toFixed(2)}`;
+}
+
+const authorLines =
+  (report.authors?.length ?? 0) > 1
+    ? [
+        "",
+        "by author: " +
+          report.authors
+            .map((a) => `${a.author} ${fmtCost(a.costUsd)}`)
+            .join(" · "),
+      ]
+    : [];
+
 const body = [
   MARKER,
   `🕯️ **Wick — this PR cost ${cost}**`,
   "",
   `${fmtTokens(total)} tokens across ${t.sessions} session${t.sessions === 1 ? "" : "s"} · ${t.stampedCommits}/${t.commits} commits stamped`,
   `input ${fmtTokens(t.tokens.input)} · cache read ${fmtTokens(t.tokens.cacheRead)} · cache write ${fmtTokens(t.tokens.cacheWrite)} · output ${fmtTokens(t.tokens.output)}`,
+  ...authorLines,
   ...(report.unknownModels?.length
     ? ["", `_no pricing for: ${report.unknownModels.join(", ")} — cost is a lower bound_`]
     : []),

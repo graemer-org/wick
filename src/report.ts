@@ -5,15 +5,27 @@ import { costUsd, loadPricing } from "./pricing.js";
 export interface CommitReport {
   commit: string;
   subject: string;
+  author: string;
+  authorEmail: string;
   sessions: string[];
   tokens: { input: number; cacheRead: number; cacheWrite: number; output: number };
   /** null when at least one model had no pricing (cost is then a lower bound). */
   costUsd: number | null;
 }
 
+export interface AuthorReport {
+  author: string;
+  authorEmail: string;
+  stampedCommits: number;
+  sessions: number;
+  tokens: { input: number; cacheRead: number; cacheWrite: number; output: number };
+  costUsd: number | null;
+}
+
 export interface Report {
   range: string;
   commits: CommitReport[];
+  authors: AuthorReport[];
   totals: {
     tokens: { input: number; cacheRead: number; cacheWrite: number; output: number };
     costUsd: number | null;
@@ -49,7 +61,7 @@ export function buildReport(cwd: string, rangeArg?: string): Report {
   const pricing = loadPricing(root);
 
   const list = tryGit(
-    ["log", "--format=%H%x09%s", ...range.split(/\s+/)],
+    ["log", "--format=%H%x09%an%x09%ae%x09%s", ...range.split(/\s+/)],
     root,
   );
   const commits: CommitReport[] = [];
@@ -61,10 +73,21 @@ export function buildReport(cwd: string, rangeArg?: string): Report {
   let stampedCommits = 0;
   let commitCount = 0;
 
+  interface AuthorAgg {
+    author: string;
+    authorEmail: string;
+    stampedCommits: number;
+    sessions: Set<string>;
+    tokens: { input: number; cacheRead: number; cacheWrite: number; output: number };
+    cost: number;
+    unknown: boolean;
+  }
+  const byAuthor = new Map<string, AuthorAgg>();
+
   for (const line of (list ?? "").split("\n")) {
     if (!line.trim()) continue;
     commitCount++;
-    const [sha, subject = ""] = line.split("\t");
+    const [sha, author = "", authorEmail = "", subject = ""] = line.split("\t");
     const note = readNote(sha, root);
     if (!note) continue;
     stampedCommits++;
@@ -95,18 +118,52 @@ export function buildReport(cwd: string, rangeArg?: string): Report {
     totals.output += tokens.output;
     totalCost += commitCost;
 
+    const authorKey = authorEmail || author;
+    const agg = byAuthor.get(authorKey) ?? {
+      author,
+      authorEmail,
+      stampedCommits: 0,
+      sessions: new Set<string>(),
+      tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 },
+      cost: 0,
+      unknown: false,
+    };
+    agg.stampedCommits++;
+    for (const s of sessions) agg.sessions.add(s);
+    agg.tokens.input += tokens.input;
+    agg.tokens.cacheRead += tokens.cacheRead;
+    agg.tokens.cacheWrite += tokens.cacheWrite;
+    agg.tokens.output += tokens.output;
+    agg.cost += commitCost;
+    agg.unknown ||= commitUnknown;
+    byAuthor.set(authorKey, agg);
+
     commits.push({
       commit: sha,
       subject,
+      author,
+      authorEmail,
       sessions: [...sessions],
       tokens,
       costUsd: commitUnknown ? null : commitCost,
     });
   }
 
+  const authors: AuthorReport[] = [...byAuthor.values()]
+    .map((a) => ({
+      author: a.author,
+      authorEmail: a.authorEmail,
+      stampedCommits: a.stampedCommits,
+      sessions: a.sessions.size,
+      tokens: a.tokens,
+      costUsd: a.unknown && a.cost === 0 ? null : a.cost,
+    }))
+    .sort((x, y) => (y.costUsd ?? 0) - (x.costUsd ?? 0));
+
   return {
     range,
     commits,
+    authors,
     totals: {
       tokens: totals,
       costUsd: sawUnknown && totalCost === 0 ? null : totalCost,
@@ -165,6 +222,25 @@ export function renderReport(report: Report): string {
       `(input ${fmtTokens(t.tokens.input)} · cache read ${fmtTokens(t.tokens.cacheRead)} · ` +
       `cache write ${fmtTokens(t.tokens.cacheWrite)} · output ${fmtTokens(t.tokens.output)})`,
   );
+  if (report.authors.length > 0) {
+    lines.push("");
+    lines.push("by author:");
+    const aRows = report.authors.map((a) => [
+      `  ${a.author}`,
+      `${a.stampedCommits} commit${a.stampedCommits === 1 ? "" : "s"}`,
+      `${a.sessions} session${a.sessions === 1 ? "" : "s"}`,
+      fmtTokens(
+        a.tokens.input + a.tokens.cacheRead + a.tokens.cacheWrite + a.tokens.output,
+      ) + " tokens",
+      fmtCost(a.costUsd),
+    ]);
+    const aWidths = aRows[0].map((_, i) =>
+      Math.max(...aRows.map((r) => r[i].length)),
+    );
+    for (const r of aRows) {
+      lines.push(r.map((cell, i) => cell.padEnd(aWidths[i])).join("  ").trimEnd());
+    }
+  }
   if (report.unknownModels.length > 0) {
     lines.push(
       `note: no pricing for ${report.unknownModels.join(", ")} — cost shown is a lower bound`,

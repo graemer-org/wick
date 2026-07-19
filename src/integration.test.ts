@@ -29,10 +29,17 @@ function makeRepo(): string {
   return dir;
 }
 
-function commit(dir: string, msg: string): string {
+function commit(
+  dir: string,
+  msg: string,
+  author?: { name: string; email: string },
+): string {
   writeFileSync(path.join(dir, "file.txt"), `${msg}\n`, { flag: "a" });
   sh(dir, "git", "add", ".");
-  sh(dir, "git", "commit", "-q", "-m", msg);
+  const authorArgs = author
+    ? ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`]
+    : [];
+  sh(dir, "git", ...authorArgs, "commit", "-q", "-m", msg);
   return sh(dir, "git", "rev-parse", "HEAD");
 }
 
@@ -242,6 +249,34 @@ describe("report ranges", () => {
     expect(report.commits).toHaveLength(1);
     expect(report.commits[0].commit).toBe(onBranch);
     expect(report.totals.tokens.output).toBe(30); // only the branch delta
+  });
+
+  it("aggregates costs by commit author", async () => {
+    const repo = makeRepo();
+    const totals = { output: 100 };
+    registerProvider(mockProvider("mock", totals));
+
+    const c1 = commit(repo, "alice work", { name: "Alice", email: "alice@example.com" });
+    await postCommit(repo, c1);
+    totals.output = 150;
+    const c2 = commit(repo, "bob work", { name: "Bob", email: "bob@example.com" });
+    await postCommit(repo, c2);
+    totals.output = 250;
+    const c3 = commit(repo, "more alice", { name: "Alice", email: "alice@example.com" });
+    await postCommit(repo, c3);
+
+    const report = buildReport(repo, "HEAD~3..HEAD");
+    expect(report.authors).toHaveLength(2);
+    const alice = report.authors.find((a) => a.author === "Alice")!;
+    const bob = report.authors.find((a) => a.author === "Bob")!;
+    expect(alice.stampedCommits).toBe(2);
+    expect(alice.tokens.output).toBe(200); // 100 + 100
+    expect(bob.stampedCommits).toBe(1);
+    expect(bob.tokens.output).toBe(50);
+    // Per-author sums equal the range total.
+    expect(alice.tokens.output + bob.tokens.output).toBe(report.totals.tokens.output);
+    // Commits carry their author in JSON output.
+    expect(report.commits.find((c) => c.commit === c2)?.author).toBe("Bob");
   });
 
   it("reports full history when on the default branch", async () => {
