@@ -1,0 +1,11 @@
+{
+  "_comment": "USD per 1M tokens per token class. Matched by provider, then by longest model-name prefix. cacheWrite uses the 5-minute-TTL rate (1.25x input); override via .wick/pricing.json in your repo if your sessions use 1h TTL (2x input). Source: https://docs.claude.com/en/docs/about-claude/pricing",
+  "claude-code": [
+    { "match": "claude-fable-5", "input": 10, "cacheRead": 1, "cacheWrite": 12.5, "output": 50 },
+    { "match": "claude-mythos", "input": 10, "cacheRead": 1, "cacheWrite": 12.5, "output": 50 },
+    { "match": "claude-opus-4", "input": 5, "cacheRead": 0.5, "cacheWrite": 6.25, "output": 25 },
+    { "match": "claude-sonnet-5", "input": 3, "cacheRead": 0.3, "cacheWrite": 3.75, "output": 15 },
+    { "match": "claude-sonnet-4", "input": 3, "cacheRead": 0.3, "cacheWrite": 3.75, "output": 15 },
+    { "match": "claude-haiku-4-5", "input": 1, "cacheRead": 0.1, "cacheWrite": 1.25, "output": 5 }
+  ]
+}
