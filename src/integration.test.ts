@@ -279,6 +279,28 @@ describe("report ranges", () => {
     expect(report.commits.find((c) => c.commit === c2)?.author).toBe("Bob");
   });
 
+  it("unifies author identities via .mailmap", async () => {
+    const repo = makeRepo();
+    const totals = { output: 10 };
+    registerProvider(mockProvider("mock", totals));
+
+    const c1 = commit(repo, "laptop", { name: "Alice", email: "alice@work.example" });
+    await postCommit(repo, c1);
+    totals.output = 30;
+    const c2 = commit(repo, "web ui", { name: "Alice", email: "12345+alice@users.noreply.github.com" });
+    await postCommit(repo, c2);
+
+    writeFileSync(
+      path.join(repo, ".mailmap"),
+      "Alice <12345+alice@users.noreply.github.com> <alice@work.example>\n",
+    );
+
+    const report = buildReport(repo, "HEAD~2..HEAD");
+    expect(report.authors).toHaveLength(1);
+    expect(report.authors[0].authorEmail).toBe("12345+alice@users.noreply.github.com");
+    expect(report.authors[0].tokens.output).toBe(30);
+  });
+
   it("reports full history when on the default branch", async () => {
     const repo = makeRepo();
     const totals = { output: 10 };

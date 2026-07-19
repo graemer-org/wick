@@ -60,8 +60,11 @@ export function buildReport(cwd: string, rangeArg?: string): Report {
   const range = resolveRange(root, rangeArg);
   const pricing = loadPricing(root);
 
+  // %aN/%aE respect .mailmap, so repos can unify author identities (e.g.
+  // GitHub squash commits carry the account's primary email while local
+  // commits use the noreply address).
   const list = tryGit(
-    ["log", "--format=%H%x09%an%x09%ae%x09%s", ...range.split(/\s+/)],
+    ["log", "--format=%H%x09%aN%x09%aE%x09%s", ...range.split(/\s+/)],
     root,
   );
   const commits: CommitReport[] = [];
@@ -225,8 +228,14 @@ export function renderReport(report: Report): string {
   if (report.authors.length > 0) {
     lines.push("");
     lines.push("by author:");
+    const nameCounts = new Map<string, number>();
+    for (const a of report.authors) {
+      nameCounts.set(a.author, (nameCounts.get(a.author) ?? 0) + 1);
+    }
     const aRows = report.authors.map((a) => [
-      `  ${a.author}`,
+      // Same name under multiple unmapped emails — show the email to
+      // disambiguate (fix properly with a .mailmap).
+      `  ${(nameCounts.get(a.author) ?? 0) > 1 ? `${a.author} <${a.authorEmail}>` : a.author}`,
       `${a.stampedCommits} commit${a.stampedCommits === 1 ? "" : "s"}`,
       `${a.sessions} session${a.sessions === 1 ? "" : "s"}`,
       fmtTokens(
