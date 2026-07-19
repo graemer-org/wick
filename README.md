@@ -78,7 +78,7 @@ Costs are computed from a bundled pricing table (USD per 1M tokens, split by inp
 Wick reads what Claude Code writes to disk and dedupes streamed message snapshots by message ID, so totals match what the API actually billed — not inflated log sums. A few honest limitations in the current version:
 
 - Sessions from another machine aren't captured (stamps carry stable session IDs, so reconciliation is possible later).
-- `cherry-pick` and `reset` can orphan stamps; `commit --amend` and `rebase` are fully handled.
+- `commit --amend` and `rebase` are fully handled by hooks. **Squash and rebase merges on GitHub** are reconciled automatically by the Action (`mode: reconcile`, triggered when a PR is merged) — the stamps are remapped onto the new commits on the base branch. For manual cases (`git merge --squash`, `cherry-pick`, `reset`), `wick reconcile --onto <new-sha> <old-range>` copies the stamps over, idempotently.
 - Wick never blocks or fails a git operation. If anything goes wrong, your commit goes through and Wick logs a warning.
 
 ## Dogfooding

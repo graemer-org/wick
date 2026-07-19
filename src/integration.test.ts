@@ -256,6 +256,54 @@ describe("report ranges", () => {
   });
 });
 
+describe("squash-merge reconciliation", () => {
+  it("consolidates branch stamps onto a squash commit, idempotently", async () => {
+    const { consolidateNotes, rangeShas } = await import("./reconcile.js");
+    const repo = makeRepo();
+    const base = sh(repo, "git", "rev-parse", "HEAD");
+
+    sh(repo, "git", "checkout", "-q", "-b", "feature");
+    const c1 = commit(repo, "a");
+    writeNote(
+      c1,
+      { v: 1, sessions: [{ id: "s", provider: "p", model: "m", input: 1, cacheRead: 10, cacheWrite: 0, output: 5 }] },
+      repo,
+    );
+    const c2 = commit(repo, "b");
+    writeNote(
+      c2,
+      { v: 1, sessions: [{ id: "s", provider: "p", model: "m", input: 2, cacheRead: 20, cacheWrite: 0, output: 7 }] },
+      repo,
+    );
+
+    // Real local squash merge: new commit, no post-rewrite mapping exists.
+    sh(repo, "git", "checkout", "-q", "main");
+    sh(repo, "git", "merge", "--squash", "feature");
+    sh(repo, "git", "commit", "-q", "-m", "feature (squashed)");
+    const squash = sh(repo, "git", "rev-parse", "HEAD");
+    expect(readNote(squash, repo)).toBeNull();
+
+    const shas = rangeShas(repo, `${base}..feature`);
+    expect(shas).toEqual([c1, c2]);
+    expect(consolidateNotes(repo, shas, squash)).toBe("written");
+    const note = readNote(squash, repo)!;
+    expect(note.sessions[0]).toMatchObject({ input: 3, cacheRead: 30, output: 12 });
+
+    // Running reconciliation again must not double the numbers.
+    expect(consolidateNotes(repo, shas, squash)).toBe("target-already-stamped");
+    expect(readNote(squash, repo)!.sessions[0].output).toBe(12);
+  });
+
+  it("reports when the source range carries no stamps", async () => {
+    const { consolidateNotes } = await import("./reconcile.js");
+    const repo = makeRepo();
+    const c1 = commit(repo, "unstamped");
+    const c2 = commit(repo, "target");
+    expect(consolidateNotes(repo, [c1], c2)).toBe("no-source-notes");
+    expect(readNote(c2, repo)).toBeNull();
+  });
+});
+
 describe("corrupt transcript resilience", () => {
   it("a git commit never fails because of wick, even with a corrupt transcript", async () => {
     const repo = makeRepo();

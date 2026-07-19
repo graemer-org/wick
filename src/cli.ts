@@ -89,6 +89,35 @@ program
   });
 
 program
+  .command("reconcile")
+  .description(
+    "copy stamps from source commits onto a rewritten commit not covered by post-rewrite (squash merge, cherry-pick, reset)",
+  )
+  .requiredOption("--onto <sha>", "the new commit to stamp (e.g. the squash commit)")
+  .argument("<range>", "source commits, e.g. main..pr-head")
+  .action(async (range: string, opts: { onto: string }) => {
+    const { consolidateNotes, rangeShas } = await import("./reconcile.js");
+    const cwd = process.cwd();
+    const shas = rangeShas(cwd, range);
+    if (shas.length === 0) {
+      console.log(`wick: no commits in range ${range}`);
+      return;
+    }
+    const result = consolidateNotes(cwd, shas, opts.onto);
+    switch (result) {
+      case "written":
+        console.log(`wick: consolidated ${shas.length} commit(s) onto ${opts.onto}`);
+        break;
+      case "target-already-stamped":
+        console.log(`wick: ${opts.onto} already has a stamp — nothing to do`);
+        break;
+      case "no-source-notes":
+        console.log(`wick: no stamps found in ${range} — nothing to do`);
+        break;
+    }
+  });
+
+program
   .command("hook")
   .description("internal entry point called by the installed git hooks")
   .argument("<event>", "post-commit | post-rewrite | post-merge")
