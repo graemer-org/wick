@@ -39,6 +39,9 @@ runs:
       run: |
         set -euo pipefail
         WICK="node ${{ github.action_path }}/dist/cli.js"
+        # git notes needs a committer identity; runners have none.
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
         # PR head commits survive branch deletion via refs/pull/<n>/head.
         git fetch origin "+refs/pull/${PR_NUMBER}/head:refs/wick/pr-head"
         git fetch origin "$BASE_REF"
