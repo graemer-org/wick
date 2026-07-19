@@ -79,12 +79,17 @@ program
   .description("token/cost report for a commit range (default: merge-base with default branch → HEAD)")
   .argument("[range]", "git revision range, e.g. main..HEAD")
   .option("--json", "machine-readable output")
-  .action((range: string | undefined, opts: { json?: boolean }) => {
+  .option("--no-color", "disable ANSI colors")
+  .action((range: string | undefined, opts: { json?: boolean; color?: boolean }) => {
     const report = buildReport(process.cwd(), range);
     if (opts.json) {
       console.log(JSON.stringify(report, null, 2));
     } else {
-      console.log(renderReport(report));
+      const color =
+        opts.color !== false &&
+        process.stdout.isTTY === true &&
+        process.env.NO_COLOR === undefined;
+      console.log(renderReport(report, { color }));
     }
   });
 

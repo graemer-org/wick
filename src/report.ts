@@ -188,46 +188,115 @@ function fmtCost(c: number | null): string {
   return c === null ? "n/a" : `$${c.toFixed(2)}`;
 }
 
-export function renderReport(report: Report): string {
-  const lines: string[] = [];
-  const rows = report.commits.map((c) => [
-    c.commit.slice(0, 8),
-    String(c.sessions.length),
-    fmtTokens(c.tokens.input),
-    fmtTokens(c.tokens.cacheRead),
-    fmtTokens(c.tokens.cacheWrite),
-    fmtTokens(c.tokens.output),
-    fmtCost(c.costUsd),
-    c.subject.length > 44 ? `${c.subject.slice(0, 41)}...` : c.subject,
-  ]);
-  const header = ["commit", "sess", "input", "cache-r", "cache-w", "output", "cost", "subject"];
-  const widths = header.map((h, i) =>
-    Math.max(h.length, ...rows.map((r) => r[i].length)),
-  );
-  const fmtRow = (r: string[]) =>
-    r.map((cell, i) => cell.padEnd(widths[i])).join("  ").trimEnd();
+/** A deterministic, gently silly comparison for a dollar amount. */
+export function costFlavor(c: number | null): string | null {
+  if (c === null) return null;
+  if (c === 0) return "barely singed the wick 🕯️";
+  if (c < 1) return "cheaper than a gumball 🍬";
+  if (c < 5) return "about one fancy latte ☕";
+  if (c < 20) return "a solid lunch 🌯";
+  if (c < 75) return "a nice dinner for two 🍝";
+  if (c < 250) return "a AAA game plus the DLC 🎮";
+  return "somebody's GPU bill 🔥";
+}
 
-  lines.push(`range: ${report.range}`);
+export interface RenderOptions {
+  /** Emit ANSI colors. Default false — the CLI enables it on a TTY. */
+  color?: boolean;
+}
+
+const totalTokens = (t: {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+}) => t.input + t.cacheRead + t.cacheWrite + t.output;
+
+export function renderReport(report: Report, opts: RenderOptions = {}): string {
+  const on = opts.color === true;
+  const paint = (code: string, s: string) => (on ? `\x1b[${code}m${s}\x1b[0m` : s);
+  const bold = (s: string) => paint("1", s);
+  const dim = (s: string) => paint("2", s);
+  const yellow = (s: string) => paint("33", s);
+  const green = (s: string) => paint("32", s);
+  const cyan = (s: string) => paint("36", s);
+  const magenta = (s: string) => paint("35", s);
+  const red = (s: string) => paint("31", s);
+
+  // Per-commit burn bar: share of the range's tokens, heat-colored.
+  const BAR_W = 10;
+  const maxTok = Math.max(1, ...report.commits.map((c) => totalTokens(c.tokens)));
+  const burnBar = (tok: number): string => {
+    const share = tok / maxTok;
+    const filled = Math.max(1, Math.round(share * BAR_W));
+    const bar = "█".repeat(filled) + dim("░".repeat(BAR_W - filled));
+    return share > 0.66 ? red(bar) : share > 0.33 ? yellow(bar) : green(bar);
+  };
+
+  const lines: string[] = [];
+  lines.push(`${bold("🕯️ wick report")} ${dim(`— ${report.range}`)}`);
   lines.push("");
-  if (rows.length === 0) {
-    lines.push("no stamped commits in range");
+
+  if (report.commits.length === 0) {
+    lines.push(dim("no stamped commits in range — light a session and commit something 🕯️"));
   } else {
-    lines.push(fmtRow(header));
-    for (const r of rows) lines.push(fmtRow(r));
+    const header = ["commit", "burn", "sess", "input", "cache-r", "cache-w", "output", "cost", "subject"];
+    const plainRows = report.commits.map((c) => [
+      c.commit.slice(0, 8),
+      "".padEnd(BAR_W), // width placeholder; painted below
+      String(c.sessions.length),
+      fmtTokens(c.tokens.input),
+      fmtTokens(c.tokens.cacheRead),
+      fmtTokens(c.tokens.cacheWrite),
+      fmtTokens(c.tokens.output),
+      fmtCost(c.costUsd),
+      c.subject.length > 40 ? `${c.subject.slice(0, 37)}...` : c.subject,
+    ]);
+    const widths = header.map((h, i) =>
+      Math.max(h.length, ...plainRows.map((r) => r[i].length)),
+    );
+    lines.push(
+      bold(header.map((h, i) => h.padEnd(widths[i])).join("  ").trimEnd()),
+    );
+    report.commits.forEach((c, rowIdx) => {
+      const r = plainRows[rowIdx];
+      const cells = [
+        yellow(r[0].padEnd(widths[0])),
+        burnBar(totalTokens(c.tokens)),
+        dim(r[2].padEnd(widths[2])),
+        r[3].padEnd(widths[3]),
+        cyan(r[4].padEnd(widths[4])),
+        r[5].padEnd(widths[5]),
+        magenta(r[6].padEnd(widths[6])),
+        green(bold(r[7].padEnd(widths[7]))),
+        r[8],
+      ];
+      lines.push(cells.join("  ").trimEnd());
+    });
   }
+
   const t = report.totals;
   lines.push("");
   lines.push(
-    `\x1b[1mtotal ${fmtCost(t.costUsd)}\x1b[0m — ` +
-      `${fmtTokens(t.tokens.input + t.tokens.cacheRead + t.tokens.cacheWrite + t.tokens.output)} tokens ` +
-      `across ${t.sessions} session${t.sessions === 1 ? "" : "s"} · ` +
-      `${t.stampedCommits}/${t.commits} commits stamped ` +
-      `(input ${fmtTokens(t.tokens.input)} · cache read ${fmtTokens(t.tokens.cacheRead)} · ` +
-      `cache write ${fmtTokens(t.tokens.cacheWrite)} · output ${fmtTokens(t.tokens.output)})`,
+    `💰 ${bold(`total ${fmtCost(t.costUsd)}`)} — ` +
+      `${bold(fmtTokens(totalTokens(t.tokens)))} tokens across ` +
+      `${t.sessions} session${t.sessions === 1 ? "" : "s"} · ` +
+      `${t.stampedCommits}/${t.commits} commits stamped`,
   );
+  lines.push(
+    dim(
+      `   input ${fmtTokens(t.tokens.input)} · cache read ${fmtTokens(t.tokens.cacheRead)} · ` +
+        `cache write ${fmtTokens(t.tokens.cacheWrite)} · output ${fmtTokens(t.tokens.output)}`,
+    ),
+  );
+  const flavor = costFlavor(t.costUsd);
+  if (flavor && t.stampedCommits > 0) {
+    lines.push(dim(`   ≈ ${flavor}`));
+  }
+
   if (report.authors.length > 0) {
     lines.push("");
-    lines.push("by author:");
+    lines.push(bold("👥 by author"));
     const nameCounts = new Map<string, number>();
     for (const a of report.authors) {
       nameCounts.set(a.author, (nameCounts.get(a.author) ?? 0) + 1);
@@ -235,24 +304,26 @@ export function renderReport(report: Report): string {
     const aRows = report.authors.map((a) => [
       // Same name under multiple unmapped emails — show the email to
       // disambiguate (fix properly with a .mailmap).
-      `  ${(nameCounts.get(a.author) ?? 0) > 1 ? `${a.author} <${a.authorEmail}>` : a.author}`,
+      `   ${(nameCounts.get(a.author) ?? 0) > 1 ? `${a.author} <${a.authorEmail}>` : a.author}`,
       `${a.stampedCommits} commit${a.stampedCommits === 1 ? "" : "s"}`,
       `${a.sessions} session${a.sessions === 1 ? "" : "s"}`,
-      fmtTokens(
-        a.tokens.input + a.tokens.cacheRead + a.tokens.cacheWrite + a.tokens.output,
-      ) + " tokens",
+      `${fmtTokens(totalTokens(a.tokens))} tokens`,
       fmtCost(a.costUsd),
     ]);
     const aWidths = aRows[0].map((_, i) =>
       Math.max(...aRows.map((r) => r[i].length)),
     );
     for (const r of aRows) {
-      lines.push(r.map((cell, i) => cell.padEnd(aWidths[i])).join("  ").trimEnd());
+      const cells = r.map((cell, i) => cell.padEnd(aWidths[i]));
+      cells[4] = green(bold(cells[4]));
+      lines.push(cells.join("  ").trimEnd());
     }
   }
   if (report.unknownModels.length > 0) {
     lines.push(
-      `note: no pricing for ${report.unknownModels.join(", ")} — cost shown is a lower bound`,
+      yellow(
+        `⚠️  no pricing for ${report.unknownModels.join(", ")} — cost shown is a lower bound`,
+      ),
     );
   }
   return lines.join("\n");
