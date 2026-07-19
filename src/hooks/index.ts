@@ -18,9 +18,10 @@ export async function postCommit(cwd: string, commit?: string): Promise<void> {
 
   await withLock(root, async () => {
     const state = await loadState(root);
-    const usage = await collectUsage(root, {
-      start: state.lastStampTs ?? undefined,
-    });
+    // Deltas are computed against CUMULATIVE session totals — do not pass a
+    // time window here, or windowed totals get compared against cumulative
+    // baselines and every delta collapses to zero.
+    const usage = await collectUsage(root, {});
     const { stamps, newState } = computeDelta(usage, state);
     if (stamps.length > 0) {
       upsertNote(target, { v: 1, sessions: stamps }, root);
