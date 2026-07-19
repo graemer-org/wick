@@ -1,0 +1,19 @@
+name: Wick PR cost
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  wick-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Dogfooding: consume the locally built action from this very repo.
+      - uses: ./

@@ -1,0 +1,45 @@
+name: "Wick PR cost report"
+description: "Posts the AI token cost of a Pull Request as a sticky PR comment, computed from wick git notes."
+inputs:
+  github-token:
+    description: "Token used to post the PR comment"
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    - name: Build wick
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        npm ci
+        npm run build
+
+    - name: Fetch wick notes
+      shell: bash
+      run: |
+        git fetch origin '+refs/notes/wick:refs/notes/wick' || echo "no wick notes on origin yet"
+
+    - name: Generate report
+      shell: bash
+      env:
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
+      run: |
+        git fetch origin "$BASE_REF" --depth=200 || true
+        RANGE="origin/${BASE_REF}..HEAD"
+        node "${{ github.action_path }}/dist/cli.js" report --json "$RANGE" > /tmp/wick-report.json
+        cat /tmp/wick-report.json
+
+    - name: Upsert sticky PR comment
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        node "${{ github.action_path }}/scripts/pr-comment.mjs" /tmp/wick-report.json
