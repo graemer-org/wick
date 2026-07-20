@@ -4,7 +4,7 @@ import { Command } from "commander";
 import { registerProvider, getProviders } from "./providers/types.js";
 import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { install, uninstall, hasWickBlock, HOOK_EVENTS } from "./install.js";
-import { postCommit, postMerge, postRewrite } from "./hooks/index.js";
+import { postCommit, postMerge, postRewrite, prePush } from "./hooks/index.js";
 import { buildBadge, buildReport, renderBadgeSvg, renderReport } from "./report.js";
 import { repoRoot, tryGit } from "./git.js";
 import { loadState } from "./state.js";
@@ -146,10 +146,11 @@ program
 program
   .command("hook")
   .description("internal entry point called by the installed git hooks")
-  .argument("<event>", "post-commit | post-rewrite | post-merge")
+  .argument("<event>", "post-commit | post-rewrite | post-merge | pre-push")
   .option("--commit <sha>", "commit to stamp (post-commit)")
   .option("--pairs <pairs>", "old/new sha pairs (post-rewrite)")
-  .action(async (event: string, opts: { commit?: string; pairs?: string }) => {
+  .option("--remote <remote>", "remote being pushed to (pre-push)")
+  .action(async (event: string, opts: { commit?: string; pairs?: string; remote?: string }) => {
     // Hooks must never fail the git operation.
     try {
       const cwd = process.cwd();
@@ -159,6 +160,8 @@ program
         await postRewrite(cwd, opts.pairs ?? "");
       } else if (event === "post-merge") {
         await postMerge(cwd);
+      } else if (event === "pre-push") {
+        await prePush(cwd, opts.remote ?? "");
       }
     } catch (err) {
       console.error(`wick: warning: ${err instanceof Error ? err.message : err}`);

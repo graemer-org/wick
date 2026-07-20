@@ -1,6 +1,6 @@
 import { collectUsage } from "../providers/types.js";
 import { computeDelta } from "../attribution.js";
-import { remapNote, upsertNote } from "../notes.js";
+import { remapNote, syncNotesToRemote, upsertNote } from "../notes.js";
 import { loadState, saveState, withLock } from "../state.js";
 import { repoRoot, tryGit } from "../git.js";
 
@@ -53,4 +53,20 @@ export async function postRewrite(cwd: string, pairs: string): Promise<void> {
  */
 export async function postMerge(cwd: string): Promise<void> {
   await postCommit(cwd);
+}
+
+/**
+ * Ship the notes ref alongside every push, merging with the remote copy
+ * when the refs diverged (CI's reconcile job pushes notes too).
+ */
+export async function prePush(cwd: string, remote: string): Promise<void> {
+  if (!remote) return;
+  const root = repoRoot(cwd);
+  const result = syncNotesToRemote(remote, root);
+  if (result === "failed") {
+    console.error(
+      `wick: warning: could not push refs/notes/wick to ${remote} — ` +
+        `stamps stay local until the next push (manual: git push ${remote} refs/notes/wick)`,
+    );
+  }
 }
