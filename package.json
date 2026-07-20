@@ -21,6 +21,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "prepare": "node scripts/prepare.mjs",
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest"

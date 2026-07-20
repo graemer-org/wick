@@ -32,10 +32,11 @@ Data flow: provider transcripts → attribution delta → git note per commit �
 - **Baselines are monotonic.** Transcript reads can race Claude Code rewriting the file and report shrunken totals; never lower a stored baseline, or the next stamp double-counts.
 - **Hooks directory is `git rev-parse --git-path hooks`** (worktrees keep hooks in the common git dir), not `--absolute-git-dir`/hooks. Respect `core.hooksPath`.
 - **Hooks never fail the git operation.** Any error → warn and exit 0. Providers that find nothing return an empty list, never throw into the hook path.
+- **Never force-fetch `refs/notes/wick` in a working clone** (`git fetch origin '+refs/notes/wick:refs/notes/wick'`) — it clobbers local stamps that haven't been pushed yet, and the delta baselines in `.git/wick/state.json` already advanced, so the tokens are unrecoverable except via the dangling old notes commit. Forced fetch is CI-only (fresh checkout, no local stamps). Locally, push notes (the `pre-push` hook does) or merge with `git notes --ref=wick merge`.
 - Unknown model → show tokens, cost `n/a` (null in JSON), never guess a price.
 
 ## Conventions
 
 - Conventional Commits (`feat:`, `fix:`, `ci:`, `docs:` …). release-please cuts releases from them — never hand-bump the version in `package.json` or edit `CHANGELOG.md`.
-- This repo dogfoods Wick: contributors run `npx wick install` after cloning, so local commits get stamped. Don't be surprised by `refs/notes/wick` activity or `.git/wick/` state.
+- This repo dogfoods Wick: `npm install` auto-installs the hooks via `scripts/prepare.mjs` (skipped in CI / as a dependency; opt-out `WICK_AUTOINSTALL=0`), so local commits get stamped. Don't be surprised by `refs/notes/wick` activity or `.git/wick/` state.
 - Pricing lives in bundled `pricing.json` (USD per 1M tokens, keyed by provider + model prefix), overridable per-repo via `.wick/pricing.json`.

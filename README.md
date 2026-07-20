@@ -138,13 +138,11 @@ This repo runs Wick on itself. Every PR here carries its own cost comment, the b
 
 ```bash
 git clone https://github.com/graemer-org/wick.git && cd wick
-npm install
-npm run build          # tsc → dist/
-npx wick install       # dogfooding: stamp your own contributions
+npm install            # also builds and installs the wick hooks (dogfooding)
 npm test               # vitest
 ```
 
-Installing the hooks is part of contributor setup — your commits to Wick get stamped like everyone else's. It's optional and never blocks a commit if something goes wrong. Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/); releases are cut automatically by release-please.
+`npm install` auto-installs the git hooks via the `prepare` script — Husky-style, so your commits to Wick get stamped like everyone else's without a manual step. It's skipped in CI and when Wick is a dependency, opt-out with `WICK_AUTOINSTALL=0`, and it never fails your install; `npx wick install` is the manual fallback. Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/); releases are cut automatically by release-please.
 
 ## Roadmap
 
