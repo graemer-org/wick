@@ -228,6 +228,80 @@ describe("rewrite remapping", () => {
   });
 });
 
+describe("fixup commits (real autosquash rebases, notes.rewriteRef set)", () => {
+  const stamp = (id: string, output: number) => ({
+    v: 1 as const,
+    sessions: [{ id, provider: "p", model: "m", input: 0, cacheRead: 0, cacheWrite: 0, output }],
+  });
+
+  /** Repo with commit A (stamped) + a fixup of A (stamped), rewriteRef configured. */
+  function fixupRepo(): { repo: string; a: string; f: string } {
+    const repo = makeRepo();
+    sh(repo, "git", "config", "notes.rewriteRef", "refs/notes/wick");
+    const a = commit(repo, "feature A");
+    writeNote(a, stamp("s1", 5), repo);
+    writeFileSync(path.join(repo, "file.txt"), "fixup\n", { flag: "a" });
+    sh(repo, "git", "add", ".");
+    sh(repo, "git", "commit", "-q", "--fixup", a);
+    const f = sh(repo, "git", "rev-parse", "HEAD");
+    writeNote(f, stamp("s2", 7), repo);
+    return { repo, a, f };
+  }
+
+  function autosquash(repo: string): string {
+    sh(repo, "git", "-c", "sequence.editor=:", "rebase", "-q", "-i", "--autosquash", "HEAD~2");
+    return sh(repo, "git", "rev-parse", "HEAD");
+  }
+
+  it("sums both stamps despite git's default concatenate copy", async () => {
+    const { repo, a, f } = fixupRepo();
+    const squashed = autosquash(repo);
+
+    // Precondition for what this test proves: git's own rewriteRef copying
+    // (default rewriteMode=concatenate) already put a malformed two-line
+    // note on the squashed commit before the hook runs.
+    const raw = sh(repo, "git", "notes", "--ref=refs/notes/wick", "show", squashed);
+    expect(raw).toContain("s1");
+    expect(raw).toContain("s2");
+    expect(readNote(squashed, repo)).toBeNull(); // malformed → treated as absent
+
+    await postRewrite(repo, `${a} ${squashed}\n${f} ${squashed}\n`);
+    const note = readNote(squashed, repo)!;
+    expect(note.sessions).toHaveLength(2);
+    expect(note.sessions.reduce((s, x) => s + x.output, 0)).toBe(12);
+  });
+
+  it("does not double-count the fixup with notes.rewriteMode=overwrite", async () => {
+    const { repo, a, f } = fixupRepo();
+    sh(repo, "git", "config", "notes.rewriteMode", "overwrite");
+    const squashed = autosquash(repo);
+
+    // Precondition: git copied ONE source note verbatim onto the squashed
+    // commit — the case that used to double-count that stamp.
+    expect(readNote(squashed, repo)).not.toBeNull();
+
+    await postRewrite(repo, `${a} ${squashed}\n${f} ${squashed}\n`);
+    const note = readNote(squashed, repo)!;
+    const byId = Object.fromEntries(note.sessions.map((s) => [s.id, s.output]));
+    expect(byId).toEqual({ s1: 5, s2: 7 }); // was s2: 14 before the fix
+  });
+
+  it("keeps a fresh amend stamp while merging the old note in", async () => {
+    const repo = makeRepo();
+    const c1 = commit(repo, "work");
+    writeNote(c1, stamp("s-old", 5), repo);
+    sh(repo, "git", "commit", "-q", "--amend", "-m", "work (amended)");
+    const c2 = sh(repo, "git", "rev-parse", "HEAD");
+    // post-commit fires on amend before post-rewrite and stamps the new delta.
+    writeNote(c2, stamp("s-new", 3), repo);
+
+    await postRewrite(repo, `${c1} ${c2}\n`);
+    const note = readNote(c2, repo)!;
+    const byId = Object.fromEntries(note.sessions.map((s) => [s.id, s.output]));
+    expect(byId).toEqual({ "s-old": 5, "s-new": 3 });
+  });
+});
+
 describe("report ranges", () => {
   beforeEach(() => clearProviders());
   afterEach(() => clearProviders());
