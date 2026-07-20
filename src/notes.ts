@@ -3,6 +3,7 @@ import { mergeNoteVersions, mergeNotes, type NoteData } from "./attribution.js";
 
 export const NOTES_REF = "refs/notes/wick";
 const REMOTE_TMP_REF = "refs/notes/wick-sync-tmp";
+const REMOTE_FETCH_TMP_REF = "refs/notes/wick-fetch-tmp";
 
 function gitNotes(args: string[], cwd: string): string {
   return execFileSync("git", ["notes", `--ref=${NOTES_REF}`, ...args], {
@@ -53,6 +54,36 @@ function tryRun(args: string[], cwd: string): string | null {
 }
 
 /**
+ * Merge every note on `sourceRef` into the local NOTES_REF, per annotated
+ * commit: adopt the source note where local has none, otherwise merge with
+ * mergeNoteVersions (per-class max, so a stale copy never lowers or doubles a
+ * local stamp). Used in both sync directions. git's built-in notes-merge
+ * strategies either drop one side or corrupt the JSON, so we do it ourselves.
+ */
+function mergeRefIntoLocalNotes(sourceRef: string, cwd: string): void {
+  const listing = tryRun(["notes", `--ref=${sourceRef}`, "list"], cwd) ?? "";
+  for (const line of listing.split("\n")) {
+    const [noteSha, commitSha] = line.trim().split(/\s+/);
+    if (!noteSha || !commitSha) continue;
+    const raw = tryRun(["cat-file", "-p", noteSha], cwd);
+    if (!raw) continue;
+    let sourceNote: NoteData;
+    try {
+      sourceNote = JSON.parse(raw);
+      if (!sourceNote || sourceNote.v !== 1 || !Array.isArray(sourceNote.sessions)) continue;
+    } catch {
+      continue; // malformed source note — leave local as-is
+    }
+    const localNote = readNote(commitSha, cwd);
+    if (!localNote) {
+      writeNote(commitSha, sourceNote, cwd);
+    } else if (JSON.stringify(localNote) !== JSON.stringify(sourceNote)) {
+      writeNote(commitSha, mergeNoteVersions(localNote, sourceNote), cwd);
+    }
+  }
+}
+
+/**
  * Push the notes ref, merging with the remote's copy first when the refs
  * have diverged (CI's reconcile job also pushes notes commits, so a plain
  * push gets a non-fast-forward rejection and local stamps silently never
@@ -71,28 +102,7 @@ export function syncNotesToRemote(
   }
   const remoteSha = tryRun(["rev-parse", REMOTE_TMP_REF], cwd);
   try {
-    // Per-annotated-commit merge with our own semantics; git's built-in
-    // notes-merge strategies either drop one side or corrupt the JSON.
-    const listing = tryRun(["notes", `--ref=${REMOTE_TMP_REF}`, "list"], cwd) ?? "";
-    for (const line of listing.split("\n")) {
-      const [noteSha, commitSha] = line.trim().split(/\s+/);
-      if (!noteSha || !commitSha) continue;
-      const raw = tryRun(["cat-file", "-p", noteSha], cwd);
-      if (!raw) continue;
-      let remoteNote: NoteData;
-      try {
-        remoteNote = JSON.parse(raw);
-        if (!remoteNote || remoteNote.v !== 1 || !Array.isArray(remoteNote.sessions)) continue;
-      } catch {
-        continue; // malformed remote note — leave local as-is
-      }
-      const localNote = readNote(commitSha, cwd);
-      if (!localNote) {
-        writeNote(commitSha, remoteNote, cwd);
-      } else if (JSON.stringify(localNote) !== JSON.stringify(remoteNote)) {
-        writeNote(commitSha, mergeNoteVersions(localNote, remoteNote), cwd);
-      }
-    }
+    mergeRefIntoLocalNotes(REMOTE_TMP_REF, cwd);
   } finally {
     tryRun(["update-ref", "-d", REMOTE_TMP_REF], cwd);
   }
@@ -113,6 +123,47 @@ export function syncNotesToRemote(
       cwd,
     ) !== null;
   return forced ? "merged-and-pushed" : "failed";
+}
+
+/**
+ * Pull the notes ref from a remote and merge it into the local notes, so a
+ * fresh checkout (or one that hasn't fetched notes) sees stamps without a
+ * manual `git fetch refs/notes/wick`. Non-destructive by construction: the
+ * remote is fetched into a temp ref and merged per commit (mergeNoteVersions,
+ * per-class max), so unpushed local stamps are preserved, never clobbered.
+ * Best-effort — every failure mode returns a status instead of throwing so
+ * the caller (wick report) can proceed with whatever is already local.
+ */
+export function syncNotesFromRemote(
+  remote: string,
+  cwd: string,
+): "updated" | "up-to-date" | "no-remote" | "failed" {
+  if (tryRun(["config", `remote.${remote}.url`], cwd) === null) return "no-remote";
+
+  // ls-remote distinguishes "remote unreachable" (null) from "remote simply
+  // has no notes yet" (empty) — a fetch of a missing ref would just error.
+  const remoteListing = tryRun(["ls-remote", remote, NOTES_REF], cwd);
+  if (remoteListing === null) return "failed";
+  if (remoteListing === "") return "up-to-date";
+
+  const localSha = tryRun(["rev-parse", "--verify", "--quiet", NOTES_REF], cwd);
+  if (tryRun(["fetch", "--quiet", remote, `+${NOTES_REF}:${REMOTE_FETCH_TMP_REF}`], cwd) === null) {
+    return "failed";
+  }
+  try {
+    const fetchedSha = tryRun(["rev-parse", "--verify", "--quiet", REMOTE_FETCH_TMP_REF], cwd);
+    if (!fetchedSha) return "up-to-date";
+    if (localSha === fetchedSha) return "up-to-date";
+    if (!localSha) {
+      // Fresh checkout with no local notes — adopt the remote ref wholesale.
+      tryRun(["update-ref", NOTES_REF, fetchedSha], cwd);
+      return "updated";
+    }
+    mergeRefIntoLocalNotes(REMOTE_FETCH_TMP_REF, cwd);
+    return "updated";
+  } finally {
+    tryRun(["update-ref", "-d", REMOTE_FETCH_TMP_REF], cwd);
+  }
 }
 
 /**

@@ -92,6 +92,24 @@ export const TestFactory = {
     return TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
   },
 
+  /** Create a bare repo, wire it as a remote of `repoPath`, and push main. */
+  addBareRemote(repoPath: string, remoteName = "origin"): string {
+    const remotePath = mkdtempSync(path.join(tmpdir(), "wick-remote-"));
+    TestFactory.git(remotePath, "git", "init", "-q", "--bare");
+    TestFactory.git(repoPath, "git", "remote", "add", remoteName, remotePath);
+    TestFactory.git(repoPath, "git", "push", "-q", remoteName, "main");
+    return remotePath;
+  },
+
+  /** Clone a (bare) remote into a fresh working dir with a test identity. */
+  cloneRepo(remotePath: string): string {
+    const clonePath = mkdtempSync(path.join(tmpdir(), "wick-clone-"));
+    TestFactory.git(clonePath, "git", "clone", "-q", remotePath, ".");
+    TestFactory.git(clonePath, "git", "config", "user.email", "test@example.com");
+    TestFactory.git(clonePath, "git", "config", "user.name", "Test");
+    return clonePath;
+  },
+
   // ------------------------------------------------------ note / session ----
 
   /** A single note session with descriptive defaults, overridable per field. */

@@ -82,7 +82,8 @@ runs:
       run: |
         git fetch origin "$BASE_REF" --depth=200 || true
         RANGE="origin/${BASE_REF}..HEAD"
-        node "${{ github.action_path }}/dist/cli.js" report --json "$RANGE" > /tmp/wick-report.json
+        # --no-fetch: notes were already fetched explicitly above.
+        node "${{ github.action_path }}/dist/cli.js" report --json --no-fetch "$RANGE" > /tmp/wick-report.json
         cat /tmp/wick-report.json
 
     - name: Upsert sticky PR comment

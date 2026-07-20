@@ -6,7 +6,7 @@ import { install, uninstall, hasWickBlock } from "./install.js";
 import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { postCommit, postRewrite } from "./hooks/index.js";
-import { readNote, writeNote } from "./notes.js";
+import { readNote, syncNotesFromRemote, writeNote } from "./notes.js";
 import { buildReport } from "./report.js";
 import { clearProviders, registerProvider, type SessionUsage } from "./providers/types.js";
 import { TestFactory } from "./test-factory.js";
@@ -493,5 +493,65 @@ describe("multi-provider end-to-end (claude-code + copilot-cli on one repo)", ()
     expect(report.unknownModels).toEqual(
       expect.arrayContaining(["claude-code/mock-claude", "copilot-cli/mock-copilot"]),
     );
+  });
+});
+
+describe("syncNotesFromRemote (auto-fetch on report)", () => {
+  it("pulls notes for a fresh checkout that has commits but no notes", () => {
+    // Arrange — origin has a stamped commit; a fresh clone has the commit
+    // but (as git does by default) none of its notes.
+    const originRepo = TestFactory.makeRepo();
+    const stampedCommit = TestFactory.git(originRepo, "git", "rev-parse", "HEAD");
+    writeNote(stampedCommit, TestFactory.makeSessionNote({ output: 42 }), originRepo);
+    const remotePath = TestFactory.addBareRemote(originRepo);
+    TestFactory.git(originRepo, "git", "push", "-q", "origin", "refs/notes/wick");
+    const clone = TestFactory.cloneRepo(remotePath);
+    expect(readNote(stampedCommit, clone)).toBeNull();
+
+    // Act
+    const result = syncNotesFromRemote("origin", clone);
+
+    // Assert
+    expect(result).toBe("updated");
+    expect(readNote(stampedCommit, clone)!.sessions[0].output).toBe(42);
+  });
+
+  it("merges remote notes into local ones without clobbering unpushed stamps", () => {
+    // Arrange — origin and the clone each hold a different session stamp on
+    // the same commit; the clone's stamp has not been pushed.
+    const originRepo = TestFactory.makeRepo();
+    const stampedCommit = TestFactory.git(originRepo, "git", "rev-parse", "HEAD");
+    writeNote(stampedCommit, TestFactory.makeSessionNote({ id: "remote-session", output: 7 }), originRepo);
+    const remotePath = TestFactory.addBareRemote(originRepo);
+    TestFactory.git(originRepo, "git", "push", "-q", "origin", "refs/notes/wick");
+    const clone = TestFactory.cloneRepo(remotePath);
+    writeNote(stampedCommit, TestFactory.makeSessionNote({ id: "local-session", output: 5 }), clone);
+
+    // Act
+    const result = syncNotesFromRemote("origin", clone);
+
+    // Assert — both stamps survive, neither is clobbered.
+    expect(result).toBe("updated");
+    const note = readNote(stampedCommit, clone)!;
+    const outputsBySessionId = Object.fromEntries(note.sessions.map((session) => [session.id, session.output]));
+    expect(outputsBySessionId).toEqual({ "local-session": 5, "remote-session": 7 });
+  });
+
+  it("is up-to-date when the remote has no notes yet", () => {
+    // Arrange — a remote and clone, but no notes were ever pushed.
+    const originRepo = TestFactory.makeRepo();
+    const remotePath = TestFactory.addBareRemote(originRepo);
+    const clone = TestFactory.cloneRepo(remotePath);
+
+    // Act + Assert
+    expect(syncNotesFromRemote("origin", clone)).toBe("up-to-date");
+  });
+
+  it("reports no-remote for a purely local repo", () => {
+    // Arrange
+    const repoPath = TestFactory.makeRepo();
+
+    // Act + Assert
+    expect(syncNotesFromRemote("origin", repoPath)).toBe("no-remote");
   });
 });

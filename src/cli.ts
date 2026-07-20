@@ -7,9 +7,9 @@ import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { install, uninstall, hasWickBlock, HOOK_EVENTS } from "./install.js";
 import { postCommit, postMerge, postRewrite, prePush } from "./hooks/index.js";
 import { buildBadge, buildReport, renderBadgeSvg, renderReport } from "./report.js";
-import { repoRoot, tryGit } from "./git.js";
+import { notesRemote, repoRoot, tryGit } from "./git.js";
 import { loadState } from "./state.js";
-import { NOTES_REF } from "./notes.js";
+import { NOTES_REF, syncNotesFromRemote } from "./notes.js";
 
 registerProvider(createClaudeCodeProvider());
 registerProvider(createCopilotCliProvider());
@@ -89,8 +89,24 @@ program
   .argument("[range]", "git revision range, e.g. main..HEAD")
   .option("--json", "machine-readable output")
   .option("--no-color", "disable ANSI colors")
-  .action((range: string | undefined, opts: { json?: boolean; color?: boolean }) => {
-    const report = buildReport(process.cwd(), range);
+  .option("--no-fetch", "skip auto-fetching refs/notes/wick from the remote")
+  .action((range: string | undefined, opts: { json?: boolean; color?: boolean; fetch?: boolean }) => {
+    const cwd = process.cwd();
+    // Notes don't travel with a normal clone/fetch, so a fresh checkout would
+    // show 0 stamps. Pull them first (non-destructive merge); best-effort and
+    // never fatal. Status goes to stderr so --json stdout stays clean.
+    if (opts.fetch !== false) {
+      try {
+        const root = repoRoot(cwd);
+        const remote = notesRemote(root);
+        if (remote && syncNotesFromRemote(remote, root) === "updated" && !opts.json) {
+          console.error(`wick: fetched refs/notes/wick from ${remote}`);
+        }
+      } catch {
+        // not a repo / git unavailable — let buildReport surface the real error
+      }
+    }
+    const report = buildReport(cwd, range);
     if (opts.json) {
       console.log(JSON.stringify(report, null, 2));
     } else {
