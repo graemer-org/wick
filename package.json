@@ -12,16 +12,15 @@
   },
   "type": "module",
   "bin": {
-    "wick": "./dist/cli.js"
+    "wick": "dist/cli.js"
   },
   "files": [
     "dist",
     "pricing.json",
-    "action.yml",
-    "scripts"
+    "scripts/prepare.mjs"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "prepare": "node scripts/prepare.mjs",
