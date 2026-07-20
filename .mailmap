@@ -1,1 +1,5 @@
+# Unifies legacy GitHub squash-merge commits (account primary email) with the
+# noreply identity, so wick's by-author breakdown counts them as one person.
+# New commits use the noreply address only — do not remove this mapping, or
+# historical ranges split into two author identities.
 Patrick Grämer <5955669+pgraemer@users.noreply.github.com> <mail+github@graemer.org>
