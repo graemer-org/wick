@@ -18,7 +18,7 @@ jobs:
       # Maintains a release PR from conventional commits (feat → minor,
       # fix → patch, feat! / BREAKING CHANGE → major). Merging that PR
       # creates the tag and the GitHub release with generated notes.
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -32,10 +32,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
       - name: Build and pack
