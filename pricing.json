@@ -7,5 +7,11 @@
     { "match": "claude-sonnet-5", "input": 3, "cacheRead": 0.3, "cacheWrite": 3.75, "output": 15 },
     { "match": "claude-sonnet-4", "input": 3, "cacheRead": 0.3, "cacheWrite": 3.75, "output": 15 },
     { "match": "claude-haiku-4-5", "input": 1, "cacheRead": 0.1, "cacheWrite": 1.25, "output": 5 }
+  ],
+  "_comment_copilot": "GitHub AI Credits rates (1 credit = $0.01), verified against the per-request price ledger Copilot CLI writes to session-store.db (token_details_json) and GitHub's published table. Models without a verified rate stay unlisted — wick shows n/a instead of guessing.",
+  "copilot-cli": [
+    { "match": "claude-opus-4", "input": 5, "cacheRead": 0.5, "cacheWrite": 6.25, "output": 25 },
+    { "match": "gpt-5.5", "input": 5, "cacheRead": 0.5, "cacheWrite": 0, "output": 30 },
+    { "match": "gpt-5 mini", "input": 0.25, "cacheRead": 0.025, "cacheWrite": 0, "output": 2 }
   ]
 }

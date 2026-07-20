@@ -1,124 +1,76 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, chmodSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import * as path from "node:path";
 import { install, uninstall, hasWickBlock } from "./install.js";
+import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
+import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { postCommit, postRewrite } from "./hooks/index.js";
 import { readNote, writeNote } from "./notes.js";
 import { buildReport } from "./report.js";
-import {
-  clearProviders,
-  registerProvider,
-  type SessionUsage,
-  type UsageProvider,
-} from "./providers/types.js";
-
-function sh(cwd: string, cmd: string, ...args: string[]): string {
-  return execFileSync(cmd, args, { cwd, encoding: "utf8" }).trim();
-}
-
-function makeRepo(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "wick-repo-"));
-  sh(dir, "git", "init", "-q", "-b", "main");
-  sh(dir, "git", "config", "user.email", "test@example.com");
-  sh(dir, "git", "config", "user.name", "Test");
-  writeFileSync(path.join(dir, "file.txt"), "one\n");
-  sh(dir, "git", "add", ".");
-  sh(dir, "git", "commit", "-q", "-m", "initial");
-  return dir;
-}
-
-function commit(
-  dir: string,
-  msg: string,
-  author?: { name: string; email: string },
-): string {
-  writeFileSync(path.join(dir, "file.txt"), `${msg}\n`, { flag: "a" });
-  sh(dir, "git", "add", ".");
-  const authorArgs = author
-    ? ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`]
-    : [];
-  sh(dir, "git", ...authorArgs, "commit", "-q", "-m", msg);
-  return sh(dir, "git", "rev-parse", "HEAD");
-}
-
-/**
- * A mock second provider proving provider isolation: its usage flows through
- * attribution → notes → report without any change outside src/providers/.
- */
-function mockProvider(id: string, totalsRef: { output: number }): UsageProvider {
-  return {
-    id,
-    async discoverSessions(_repoRoot, _window) {
-      return [{ id: "mock-session-1", provider: id, path: "/dev/null" }];
-    },
-    async getUsage(ref): Promise<SessionUsage> {
-      return {
-        sessionId: ref.id,
-        provider: id,
-        perModel: [
-          {
-            model: "mock-model-x",
-            input: 7,
-            cacheRead: 0,
-            cacheWrite: 0,
-            output: totalsRef.output,
-          },
-        ],
-        firstTs: "2026-07-19T10:00:00.000Z",
-        lastTs: "2026-07-19T12:00:00.000Z",
-      };
-    },
-  };
-}
+import { clearProviders, registerProvider, type SessionUsage } from "./providers/types.js";
+import { TestFactory } from "./test-factory.js";
 
 describe("installer (chain-safe)", () => {
   it("preserves an existing Husky-style hook, appends a wick block, and is idempotent", async () => {
-    const repo = makeRepo();
-    const hookPath = path.join(repo, ".git", "hooks", "post-commit");
-    const husky = `#!/bin/sh\n. "$(dirname "$0")/_/husky.sh"\necho husky-ran\n`;
-    writeFileSync(hookPath, husky);
+    // Arrange — a repo with a pre-existing Husky-style hook.
+    const repoPath = TestFactory.makeRepo();
+    const hookPath = path.join(repoPath, ".git", "hooks", "post-commit");
+    const huskyHook = `#!/bin/sh\n. "$(dirname "$0")/_/husky.sh"\necho husky-ran\n`;
+    writeFileSync(hookPath, huskyHook);
     chmodSync(hookPath, 0o755);
 
-    await install(repo);
-    let content = readFileSync(hookPath, "utf8");
-    expect(content).toContain("husky.sh");
-    expect(content).toContain("echo husky-ran");
-    expect(content).toContain("# >>> wick >>>");
+    // Act
+    await install(repoPath);
 
-    // Idempotent — second install must not duplicate the block.
-    await install(repo);
-    content = readFileSync(hookPath, "utf8");
-    expect(content.split("# >>> wick >>>").length).toBe(2);
+    // Assert — existing content preserved, wick block appended.
+    let hookContent = readFileSync(hookPath, "utf8");
+    expect(hookContent).toContain("husky.sh");
+    expect(hookContent).toContain("echo husky-ran");
+    expect(hookContent).toContain("# >>> wick >>>");
 
-    // Uninstall removes only the wick block.
-    await uninstall(repo);
-    content = readFileSync(hookPath, "utf8");
-    expect(content).toContain("echo husky-ran");
-    expect(content).not.toContain("wick");
+    // Act + Assert — idempotent: a second install must not duplicate the block.
+    await install(repoPath);
+    hookContent = readFileSync(hookPath, "utf8");
+    expect(hookContent.split("# >>> wick >>>").length).toBe(2);
+
+    // Act + Assert — uninstall removes only the wick block.
+    await uninstall(repoPath);
+    hookContent = readFileSync(hookPath, "utf8");
+    expect(hookContent).toContain("echo husky-ran");
+    expect(hookContent).not.toContain("wick");
   });
 
   it("creates hooks from scratch and deletes them again on uninstall", async () => {
-    const repo = makeRepo();
-    await install(repo);
-    expect(await hasWickBlock(repo, "post-commit")).toBe(true);
-    expect(await hasWickBlock(repo, "post-rewrite")).toBe(true);
-    expect(await hasWickBlock(repo, "post-merge")).toBe(true);
-    expect(await hasWickBlock(repo, "pre-push")).toBe(true);
-    // notes.rewriteRef configured
-    expect(sh(repo, "git", "config", "notes.rewriteRef")).toBe("refs/notes/wick");
+    // Arrange
+    const repoPath = TestFactory.makeRepo();
 
-    await uninstall(repo);
-    expect(existsSync(path.join(repo, ".git", "hooks", "post-commit"))).toBe(false);
+    // Act
+    await install(repoPath);
+
+    // Assert — all four hooks present, notes.rewriteRef configured.
+    expect(await hasWickBlock(repoPath, "post-commit")).toBe(true);
+    expect(await hasWickBlock(repoPath, "post-rewrite")).toBe(true);
+    expect(await hasWickBlock(repoPath, "post-merge")).toBe(true);
+    expect(await hasWickBlock(repoPath, "pre-push")).toBe(true);
+    expect(TestFactory.git(repoPath, "git", "config", "notes.rewriteRef")).toBe("refs/notes/wick");
+
+    // Act + Assert — uninstall deletes the wick-only hook files again.
+    await uninstall(repoPath);
+    expect(existsSync(path.join(repoPath, ".git", "hooks", "post-commit"))).toBe(false);
   });
 
   it("respects core.hooksPath", async () => {
-    const repo = makeRepo();
-    sh(repo, "git", "config", "core.hooksPath", ".myhooks");
-    const result = await install(repo);
-    expect(result.hooksDir).toBe(path.join(repo, ".myhooks"));
-    expect(existsSync(path.join(repo, ".myhooks", "post-commit"))).toBe(true);
+    // Arrange
+    const repoPath = TestFactory.makeRepo();
+    TestFactory.git(repoPath, "git", "config", "core.hooksPath", ".myhooks");
+
+    // Act
+    const result = await install(repoPath);
+
+    // Assert
+    expect(result.hooksDir).toBe(path.join(repoPath, ".myhooks"));
+    expect(existsSync(path.join(repoPath, ".myhooks", "post-commit"))).toBe(true);
   });
 });
 
@@ -127,38 +79,43 @@ describe("attribution end-to-end (mock provider = provider isolation)", () => {
   afterEach(() => clearProviders());
 
   it("stamps commits with deltas and reports them", async () => {
-    const repo = makeRepo();
-    const totals = { output: 100 };
-    registerProvider(mockProvider("mock-provider", totals));
+    // Arrange
+    const repoPath = TestFactory.makeRepo();
+    const sessionTotals = { output: 100 };
+    registerProvider(TestFactory.makeMockProvider("mock-provider", sessionTotals));
 
-    const c1 = commit(repo, "first change");
-    await postCommit(repo, c1);
-    const note1 = readNote(c1, repo);
-    expect(note1).not.toBeNull();
-    expect(note1!.sessions[0]).toMatchObject({
+    // Act
+    const firstCommit = TestFactory.makeCommit(repoPath, "first change");
+    await postCommit(repoPath, firstCommit);
+
+    // Assert
+    const firstNote = readNote(firstCommit, repoPath);
+    expect(firstNote).not.toBeNull();
+    expect(firstNote!.sessions[0]).toMatchObject({
       id: "mock-session-1",
       provider: "mock-provider",
       model: "mock-model-x",
       output: 100,
     });
 
-    // Session keeps burning tokens; next commit gets only the delta.
-    totals.output = 260;
-    const c2 = commit(repo, "second change");
-    await postCommit(repo, c2);
-    const note2 = readNote(c2, repo);
-    expect(note2!.sessions[0].output).toBe(160);
+    // Act + Assert — session keeps burning; next commit gets only the delta.
+    sessionTotals.output = 260;
+    const secondCommit = TestFactory.makeCommit(repoPath, "second change");
+    await postCommit(repoPath, secondCommit);
+    const secondNote = readNote(secondCommit, repoPath);
+    expect(secondNote!.sessions[0].output).toBe(160);
 
-    // Report aggregates both commits; unknown model → cost n/a, tokens shown.
-    const report = buildReport(repo, "HEAD~2..HEAD");
+    // Act + Assert — report aggregates both commits; unknown model → cost n/a.
+    const report = buildReport(repoPath, "HEAD~2..HEAD");
     expect(report.totals.tokens.output).toBe(260);
     expect(report.totals.sessions).toBe(1);
-    expect(report.commits.every((c) => c.costUsd === null)).toBe(true);
+    expect(report.commits.every((commitReport) => commitReport.costUsd === null)).toBe(true);
     expect(report.unknownModels).toContain("mock-provider/mock-model-x");
   });
 
   it("never throws into the hook path when a provider fails", async () => {
-    const repo = makeRepo();
+    // Arrange — a provider that throws from every method.
+    const repoPath = TestFactory.makeRepo();
     registerProvider({
       id: "broken",
       async discoverSessions() {
@@ -168,137 +125,140 @@ describe("attribution end-to-end (mock provider = provider isolation)", () => {
         throw new Error("boom");
       },
     });
-    const c1 = commit(repo, "change");
-    await expect(postCommit(repo, c1)).resolves.toBeUndefined();
-    expect(readNote(c1, repo)).toBeNull();
+    const stampedCommit = TestFactory.makeCommit(repoPath, "change");
+
+    // Act + Assert — the hook path swallows the failure and writes no note.
+    await expect(postCommit(repoPath, stampedCommit)).resolves.toBeUndefined();
+    expect(readNote(stampedCommit, repoPath)).toBeNull();
   });
 });
 
 describe("rewrite remapping", () => {
   it("preserves stamps across git commit --amend", async () => {
-    const repo = makeRepo();
-    const c1 = commit(repo, "work");
-    writeNote(
-      c1,
-      { v: 1, sessions: [{ id: "s", provider: "p", model: "m", input: 1, cacheRead: 0, cacheWrite: 0, output: 9 }] },
-      repo,
-    );
-    sh(repo, "git", "commit", "-q", "--amend", "-m", "work (amended)");
-    const c2 = sh(repo, "git", "rev-parse", "HEAD");
-    expect(c2).not.toBe(c1);
+    // Arrange — a stamped commit that gets amended into a new sha.
+    const repoPath = TestFactory.makeRepo();
+    const originalCommit = TestFactory.makeCommit(repoPath, "work");
+    writeNote(originalCommit, TestFactory.makeSessionNote({ input: 1, output: 9 }), repoPath);
+    TestFactory.git(repoPath, "git", "commit", "-q", "--amend", "-m", "work (amended)");
+    const amendedCommit = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+    expect(amendedCommit).not.toBe(originalCommit);
 
-    await postRewrite(repo, `${c1} ${c2}\n`);
-    const note = readNote(c2, repo);
+    // Act
+    await postRewrite(repoPath, `${originalCommit} ${amendedCommit}\n`);
+
+    // Assert
+    const note = readNote(amendedCommit, repoPath);
     expect(note!.sessions[0].output).toBe(9);
   });
 
   it("preserves stamps across rebase and merges with an existing note", async () => {
-    const repo = makeRepo();
-    const c1 = commit(repo, "a");
-    writeNote(
-      c1,
-      { v: 1, sessions: [{ id: "s", provider: "p", model: "m", input: 0, cacheRead: 0, cacheWrite: 0, output: 5 }] },
-      repo,
-    );
-    const c2 = commit(repo, "b");
-    writeNote(
-      c2,
-      { v: 1, sessions: [{ id: "s", provider: "p", model: "m", input: 0, cacheRead: 0, cacheWrite: 0, output: 7 }] },
-      repo,
-    );
-    // Simulate a rebase squashing both commits into one new commit.
-    const squashed = commit(repo, "squashed");
-    await postRewrite(repo, `${c1} ${squashed}\n${c2} ${squashed}\n`);
-    const note = readNote(squashed, repo);
+    // Arrange — two stamped commits about to be squashed into one.
+    const repoPath = TestFactory.makeRepo();
+    const firstCommit = TestFactory.makeCommit(repoPath, "a");
+    writeNote(firstCommit, TestFactory.makeSessionNote({ output: 5 }), repoPath);
+    const secondCommit = TestFactory.makeCommit(repoPath, "b");
+    writeNote(secondCommit, TestFactory.makeSessionNote({ output: 7 }), repoPath);
+    const squashedCommit = TestFactory.makeCommit(repoPath, "squashed");
+
+    // Act — simulate a rebase squashing both commits into one new commit.
+    await postRewrite(repoPath, `${firstCommit} ${squashedCommit}\n${secondCommit} ${squashedCommit}\n`);
+
+    // Assert
+    const note = readNote(squashedCommit, repoPath);
     expect(note!.sessions[0].output).toBe(12);
   });
 
   it("does not double a note that git's notes.rewriteRef already copied", async () => {
-    const repo = makeRepo();
-    const c1 = commit(repo, "a");
-    const data = {
-      v: 1 as const,
-      sessions: [{ id: "s", provider: "p", model: "m", input: 0, cacheRead: 0, cacheWrite: 0, output: 5 }],
-    };
-    writeNote(c1, data, repo);
-    const c2 = commit(repo, "b");
-    writeNote(c2, data, repo); // identical — as if git already copied it
-    await postRewrite(repo, `${c1} ${c2}\n`);
-    expect(readNote(c2, repo)!.sessions[0].output).toBe(5);
+    // Arrange — the new commit already carries an identical git-copied note.
+    const repoPath = TestFactory.makeRepo();
+    const firstCommit = TestFactory.makeCommit(repoPath, "a");
+    const noteData = TestFactory.makeSessionNote({ output: 5 });
+    writeNote(firstCommit, noteData, repoPath);
+    const secondCommit = TestFactory.makeCommit(repoPath, "b");
+    writeNote(secondCommit, noteData, repoPath); // identical — as if git already copied it
+
+    // Act
+    await postRewrite(repoPath, `${firstCommit} ${secondCommit}\n`);
+
+    // Assert — not doubled.
+    expect(readNote(secondCommit, repoPath)!.sessions[0].output).toBe(5);
   });
 });
 
 describe("fixup commits (real autosquash rebases, notes.rewriteRef set)", () => {
-  const stamp = (id: string, output: number) => ({
-    v: 1 as const,
-    sessions: [{ id, provider: "p", model: "m", input: 0, cacheRead: 0, cacheWrite: 0, output }],
-  });
-
-  /** Repo with commit A (stamped) + a fixup of A (stamped), rewriteRef configured. */
-  function fixupRepo(): { repo: string; a: string; f: string } {
-    const repo = makeRepo();
-    sh(repo, "git", "config", "notes.rewriteRef", "refs/notes/wick");
-    const a = commit(repo, "feature A");
-    writeNote(a, stamp("s1", 5), repo);
-    writeFileSync(path.join(repo, "file.txt"), "fixup\n", { flag: "a" });
-    sh(repo, "git", "add", ".");
-    sh(repo, "git", "commit", "-q", "--fixup", a);
-    const f = sh(repo, "git", "rev-parse", "HEAD");
-    writeNote(f, stamp("s2", 7), repo);
-    return { repo, a, f };
+  /** Repo with a feature commit (stamped) + a fixup of it (stamped). */
+  function makeFixupRepo(): { repoPath: string; featureCommit: string; fixupCommit: string } {
+    const repoPath = TestFactory.makeRepo();
+    TestFactory.git(repoPath, "git", "config", "notes.rewriteRef", "refs/notes/wick");
+    const featureCommit = TestFactory.makeCommit(repoPath, "feature A");
+    writeNote(featureCommit, TestFactory.makeSessionNote({ id: "session-1", output: 5 }), repoPath);
+    writeFileSync(path.join(repoPath, "file.txt"), "fixup\n", { flag: "a" });
+    TestFactory.git(repoPath, "git", "add", ".");
+    TestFactory.git(repoPath, "git", "commit", "-q", "--fixup", featureCommit);
+    const fixupCommit = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+    writeNote(fixupCommit, TestFactory.makeSessionNote({ id: "session-2", output: 7 }), repoPath);
+    return { repoPath, featureCommit, fixupCommit };
   }
 
-  function autosquash(repo: string): string {
-    sh(repo, "git", "-c", "sequence.editor=:", "rebase", "-q", "-i", "--autosquash", "HEAD~2");
-    return sh(repo, "git", "rev-parse", "HEAD");
+  function autosquash(repoPath: string): string {
+    TestFactory.git(repoPath, "git", "-c", "sequence.editor=:", "rebase", "-q", "-i", "--autosquash", "HEAD~2");
+    return TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
   }
 
   it("sums both stamps despite git's default concatenate copy", async () => {
-    const { repo, a, f } = fixupRepo();
-    const squashed = autosquash(repo);
-
-    // Precondition for what this test proves: git's own rewriteRef copying
-    // (default rewriteMode=concatenate) already put a malformed two-line
+    // Arrange — a real autosquash rebase; git's own rewriteRef copying
+    // (default rewriteMode=concatenate) has already put a malformed two-line
     // note on the squashed commit before the hook runs.
-    const raw = sh(repo, "git", "notes", "--ref=refs/notes/wick", "show", squashed);
-    expect(raw).toContain("s1");
-    expect(raw).toContain("s2");
-    expect(readNote(squashed, repo)).toBeNull(); // malformed → treated as absent
+    const { repoPath, featureCommit, fixupCommit } = makeFixupRepo();
+    const squashedCommit = autosquash(repoPath);
+    const rawNote = TestFactory.git(repoPath, "git", "notes", "--ref=refs/notes/wick", "show", squashedCommit);
+    expect(rawNote).toContain("session-1");
+    expect(rawNote).toContain("session-2");
+    expect(readNote(squashedCommit, repoPath)).toBeNull(); // malformed → treated as absent
 
-    await postRewrite(repo, `${a} ${squashed}\n${f} ${squashed}\n`);
-    const note = readNote(squashed, repo)!;
+    // Act
+    await postRewrite(repoPath, `${featureCommit} ${squashedCommit}\n${fixupCommit} ${squashedCommit}\n`);
+
+    // Assert
+    const note = readNote(squashedCommit, repoPath)!;
     expect(note.sessions).toHaveLength(2);
-    expect(note.sessions.reduce((s, x) => s + x.output, 0)).toBe(12);
+    expect(note.sessions.reduce((sum, session) => sum + session.output, 0)).toBe(12);
   });
 
   it("does not double-count the fixup with notes.rewriteMode=overwrite", async () => {
-    const { repo, a, f } = fixupRepo();
-    sh(repo, "git", "config", "notes.rewriteMode", "overwrite");
-    const squashed = autosquash(repo);
+    // Arrange — with rewriteMode=overwrite, git copied ONE source note
+    // verbatim onto the squashed commit: the case that used to double-count.
+    const { repoPath, featureCommit, fixupCommit } = makeFixupRepo();
+    TestFactory.git(repoPath, "git", "config", "notes.rewriteMode", "overwrite");
+    const squashedCommit = autosquash(repoPath);
+    expect(readNote(squashedCommit, repoPath)).not.toBeNull();
 
-    // Precondition: git copied ONE source note verbatim onto the squashed
-    // commit — the case that used to double-count that stamp.
-    expect(readNote(squashed, repo)).not.toBeNull();
+    // Act
+    await postRewrite(repoPath, `${featureCommit} ${squashedCommit}\n${fixupCommit} ${squashedCommit}\n`);
 
-    await postRewrite(repo, `${a} ${squashed}\n${f} ${squashed}\n`);
-    const note = readNote(squashed, repo)!;
-    const byId = Object.fromEntries(note.sessions.map((s) => [s.id, s.output]));
-    expect(byId).toEqual({ s1: 5, s2: 7 }); // was s2: 14 before the fix
+    // Assert
+    const note = readNote(squashedCommit, repoPath)!;
+    const outputsBySessionId = Object.fromEntries(note.sessions.map((session) => [session.id, session.output]));
+    expect(outputsBySessionId).toEqual({ "session-1": 5, "session-2": 7 }); // was session-2: 14 before the fix
   });
 
   it("keeps a fresh amend stamp while merging the old note in", async () => {
-    const repo = makeRepo();
-    const c1 = commit(repo, "work");
-    writeNote(c1, stamp("s-old", 5), repo);
-    sh(repo, "git", "commit", "-q", "--amend", "-m", "work (amended)");
-    const c2 = sh(repo, "git", "rev-parse", "HEAD");
-    // post-commit fires on amend before post-rewrite and stamps the new delta.
-    writeNote(c2, stamp("s-new", 3), repo);
+    // Arrange — post-commit fires on amend before post-rewrite and has
+    // already stamped the new delta onto the amended commit.
+    const repoPath = TestFactory.makeRepo();
+    const originalCommit = TestFactory.makeCommit(repoPath, "work");
+    writeNote(originalCommit, TestFactory.makeSessionNote({ id: "session-old", output: 5 }), repoPath);
+    TestFactory.git(repoPath, "git", "commit", "-q", "--amend", "-m", "work (amended)");
+    const amendedCommit = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+    writeNote(amendedCommit, TestFactory.makeSessionNote({ id: "session-new", output: 3 }), repoPath);
 
-    await postRewrite(repo, `${c1} ${c2}\n`);
-    const note = readNote(c2, repo)!;
-    const byId = Object.fromEntries(note.sessions.map((s) => [s.id, s.output]));
-    expect(byId).toEqual({ "s-old": 5, "s-new": 3 });
+    // Act
+    await postRewrite(repoPath, `${originalCommit} ${amendedCommit}\n`);
+
+    // Assert
+    const note = readNote(amendedCommit, repoPath)!;
+    const outputsBySessionId = Object.fromEntries(note.sessions.map((session) => [session.id, session.output]));
+    expect(outputsBySessionId).toEqual({ "session-old": 5, "session-new": 3 });
   });
 });
 
@@ -307,42 +267,47 @@ describe("report ranges", () => {
   afterEach(() => clearProviders());
 
   it("only includes commits ahead of the merge-base on a branch", async () => {
-    const repo = makeRepo();
-    const totals = { output: 50 };
-    registerProvider(mockProvider("mock", totals));
+    // Arrange — a stamped commit on main, then more spend on a feature branch.
+    const repoPath = TestFactory.makeRepo();
+    const sessionTotals = { output: 50 };
+    registerProvider(TestFactory.makeMockProvider("mock", sessionTotals));
+    const mainCommit = TestFactory.makeCommit(repoPath, "main work");
+    await postCommit(repoPath, mainCommit);
+    TestFactory.git(repoPath, "git", "checkout", "-q", "-b", "feature");
+    sessionTotals.output = 80;
+    const branchCommit = TestFactory.makeCommit(repoPath, "branch work");
+    await postCommit(repoPath, branchCommit);
 
-    const onMain = commit(repo, "main work");
-    await postCommit(repo, onMain);
+    // Act — default range: merge-base(main, HEAD)..HEAD
+    const report = buildReport(repoPath);
 
-    sh(repo, "git", "checkout", "-q", "-b", "feature");
-    totals.output = 80;
-    const onBranch = commit(repo, "branch work");
-    await postCommit(repo, onBranch);
-
-    const report = buildReport(repo); // default range: merge-base(main, HEAD)..HEAD
+    // Assert — parent-branch costs excluded.
     expect(report.commits).toHaveLength(1);
-    expect(report.commits[0].commit).toBe(onBranch);
+    expect(report.commits[0].commit).toBe(branchCommit);
     expect(report.totals.tokens.output).toBe(30); // only the branch delta
   });
 
   it("aggregates costs by commit author", async () => {
-    const repo = makeRepo();
-    const totals = { output: 100 };
-    registerProvider(mockProvider("mock", totals));
+    // Arrange — three stamped commits from two authors.
+    const repoPath = TestFactory.makeRepo();
+    const sessionTotals = { output: 100 };
+    registerProvider(TestFactory.makeMockProvider("mock", sessionTotals));
+    const aliceCommit = TestFactory.makeCommit(repoPath, "alice work", { name: "Alice", email: "alice@example.com" });
+    await postCommit(repoPath, aliceCommit);
+    sessionTotals.output = 150;
+    const bobCommit = TestFactory.makeCommit(repoPath, "bob work", { name: "Bob", email: "bob@example.com" });
+    await postCommit(repoPath, bobCommit);
+    sessionTotals.output = 250;
+    const moreAliceCommit = TestFactory.makeCommit(repoPath, "more alice", { name: "Alice", email: "alice@example.com" });
+    await postCommit(repoPath, moreAliceCommit);
 
-    const c1 = commit(repo, "alice work", { name: "Alice", email: "alice@example.com" });
-    await postCommit(repo, c1);
-    totals.output = 150;
-    const c2 = commit(repo, "bob work", { name: "Bob", email: "bob@example.com" });
-    await postCommit(repo, c2);
-    totals.output = 250;
-    const c3 = commit(repo, "more alice", { name: "Alice", email: "alice@example.com" });
-    await postCommit(repo, c3);
+    // Act
+    const report = buildReport(repoPath, "HEAD~3..HEAD");
 
-    const report = buildReport(repo, "HEAD~3..HEAD");
+    // Assert
     expect(report.authors).toHaveLength(2);
-    const alice = report.authors.find((a) => a.author === "Alice")!;
-    const bob = report.authors.find((a) => a.author === "Bob")!;
+    const alice = report.authors.find((author) => author.author === "Alice")!;
+    const bob = report.authors.find((author) => author.author === "Bob")!;
     expect(alice.stampedCommits).toBe(2);
     expect(alice.tokens.output).toBe(200); // 100 + 100
     expect(bob.stampedCommits).toBe(1);
@@ -350,38 +315,45 @@ describe("report ranges", () => {
     // Per-author sums equal the range total.
     expect(alice.tokens.output + bob.tokens.output).toBe(report.totals.tokens.output);
     // Commits carry their author in JSON output.
-    expect(report.commits.find((c) => c.commit === c2)?.author).toBe("Bob");
+    expect(report.commits.find((commitReport) => commitReport.commit === bobCommit)?.author).toBe("Bob");
   });
 
   it("unifies author identities via .mailmap", async () => {
-    const repo = makeRepo();
-    const totals = { output: 10 };
-    registerProvider(mockProvider("mock", totals));
-
-    const c1 = commit(repo, "laptop", { name: "Alice", email: "alice@work.example" });
-    await postCommit(repo, c1);
-    totals.output = 30;
-    const c2 = commit(repo, "web ui", { name: "Alice", email: "12345+alice@users.noreply.github.com" });
-    await postCommit(repo, c2);
-
+    // Arrange — same person under two emails, unified by a .mailmap.
+    const repoPath = TestFactory.makeRepo();
+    const sessionTotals = { output: 10 };
+    registerProvider(TestFactory.makeMockProvider("mock", sessionTotals));
+    const laptopCommit = TestFactory.makeCommit(repoPath, "laptop", { name: "Alice", email: "alice@work.example" });
+    await postCommit(repoPath, laptopCommit);
+    sessionTotals.output = 30;
+    const webCommit = TestFactory.makeCommit(repoPath, "web ui", { name: "Alice", email: "12345+alice@users.noreply.github.com" });
+    await postCommit(repoPath, webCommit);
     writeFileSync(
-      path.join(repo, ".mailmap"),
+      path.join(repoPath, ".mailmap"),
       "Alice <12345+alice@users.noreply.github.com> <alice@work.example>\n",
     );
 
-    const report = buildReport(repo, "HEAD~2..HEAD");
+    // Act
+    const report = buildReport(repoPath, "HEAD~2..HEAD");
+
+    // Assert
     expect(report.authors).toHaveLength(1);
     expect(report.authors[0].authorEmail).toBe("12345+alice@users.noreply.github.com");
     expect(report.authors[0].tokens.output).toBe(30);
   });
 
   it("reports full history when on the default branch", async () => {
-    const repo = makeRepo();
-    const totals = { output: 10 };
-    registerProvider(mockProvider("mock", totals));
-    const c1 = commit(repo, "x");
-    await postCommit(repo, c1);
-    const report = buildReport(repo);
+    // Arrange
+    const repoPath = TestFactory.makeRepo();
+    const sessionTotals = { output: 10 };
+    registerProvider(TestFactory.makeMockProvider("mock", sessionTotals));
+    const onlyCommit = TestFactory.makeCommit(repoPath, "x");
+    await postCommit(repoPath, onlyCommit);
+
+    // Act
+    const report = buildReport(repoPath);
+
+    // Assert
     expect(report.range).toBe("HEAD");
     expect(report.totals.tokens.output).toBe(10);
   });
@@ -389,64 +361,137 @@ describe("report ranges", () => {
 
 describe("squash-merge reconciliation", () => {
   it("consolidates branch stamps onto a squash commit, idempotently", async () => {
+    // Arrange — a stamped feature branch squash-merged without post-rewrite.
     const { consolidateNotes, rangeShas } = await import("./reconcile.js");
-    const repo = makeRepo();
-    const base = sh(repo, "git", "rev-parse", "HEAD");
+    const repoPath = TestFactory.makeRepo();
+    const baseCommit = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
 
-    sh(repo, "git", "checkout", "-q", "-b", "feature");
-    const c1 = commit(repo, "a");
-    writeNote(
-      c1,
-      { v: 1, sessions: [{ id: "s", provider: "p", model: "m", input: 1, cacheRead: 10, cacheWrite: 0, output: 5 }] },
-      repo,
-    );
-    const c2 = commit(repo, "b");
-    writeNote(
-      c2,
-      { v: 1, sessions: [{ id: "s", provider: "p", model: "m", input: 2, cacheRead: 20, cacheWrite: 0, output: 7 }] },
-      repo,
-    );
+    TestFactory.git(repoPath, "git", "checkout", "-q", "-b", "feature");
+    const firstCommit = TestFactory.makeCommit(repoPath, "a");
+    writeNote(firstCommit, TestFactory.makeSessionNote({ input: 1, cacheRead: 10, output: 5 }), repoPath);
+    const secondCommit = TestFactory.makeCommit(repoPath, "b");
+    writeNote(secondCommit, TestFactory.makeSessionNote({ input: 2, cacheRead: 20, output: 7 }), repoPath);
 
-    // Real local squash merge: new commit, no post-rewrite mapping exists.
-    sh(repo, "git", "checkout", "-q", "main");
-    sh(repo, "git", "merge", "--squash", "feature");
-    sh(repo, "git", "commit", "-q", "-m", "feature (squashed)");
-    const squash = sh(repo, "git", "rev-parse", "HEAD");
-    expect(readNote(squash, repo)).toBeNull();
+    TestFactory.git(repoPath, "git", "checkout", "-q", "main");
+    TestFactory.git(repoPath, "git", "merge", "--squash", "feature");
+    TestFactory.git(repoPath, "git", "commit", "-q", "-m", "feature (squashed)");
+    const squashCommit = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+    expect(readNote(squashCommit, repoPath)).toBeNull();
 
-    const shas = rangeShas(repo, `${base}..feature`);
-    expect(shas).toEqual([c1, c2]);
-    expect(consolidateNotes(repo, shas, squash)).toBe("written");
-    const note = readNote(squash, repo)!;
+    // Act
+    const sourceShas = rangeShas(repoPath, `${baseCommit}..feature`);
+    const reconcileResult = consolidateNotes(repoPath, sourceShas, squashCommit);
+
+    // Assert — both stamps consolidated onto the squash commit.
+    expect(sourceShas).toEqual([firstCommit, secondCommit]);
+    expect(reconcileResult).toBe("written");
+    const note = readNote(squashCommit, repoPath)!;
     expect(note.sessions[0]).toMatchObject({ input: 3, cacheRead: 30, output: 12 });
 
-    // Running reconciliation again must not double the numbers.
-    expect(consolidateNotes(repo, shas, squash)).toBe("target-already-stamped");
-    expect(readNote(squash, repo)!.sessions[0].output).toBe(12);
+    // Act + Assert — running reconciliation again must not double the numbers.
+    expect(consolidateNotes(repoPath, sourceShas, squashCommit)).toBe("target-already-stamped");
+    expect(readNote(squashCommit, repoPath)!.sessions[0].output).toBe(12);
   });
 
   it("reports when the source range carries no stamps", async () => {
+    // Arrange
     const { consolidateNotes } = await import("./reconcile.js");
-    const repo = makeRepo();
-    const c1 = commit(repo, "unstamped");
-    const c2 = commit(repo, "target");
-    expect(consolidateNotes(repo, [c1], c2)).toBe("no-source-notes");
-    expect(readNote(c2, repo)).toBeNull();
+    const repoPath = TestFactory.makeRepo();
+    const unstampedCommit = TestFactory.makeCommit(repoPath, "unstamped");
+    const targetCommit = TestFactory.makeCommit(repoPath, "target");
+
+    // Act + Assert
+    expect(consolidateNotes(repoPath, [unstampedCommit], targetCommit)).toBe("no-source-notes");
+    expect(readNote(targetCommit, repoPath)).toBeNull();
   });
 });
 
 describe("corrupt transcript resilience", () => {
   it("a git commit never fails because of wick, even with a corrupt transcript", async () => {
-    const repo = makeRepo();
-    await install(repo);
-    // Sanity: committing with hooks installed (wick not on PATH inside the
-    // test env resolves via the embedded node entry; either way the hook
-    // exits 0 because every branch ends in `|| true`).
-    const out = execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "hooked"], {
-      cwd: repo,
+    // Arrange
+    const repoPath = TestFactory.makeRepo();
+    await install(repoPath);
+
+    // Act — commit with hooks installed (wick not on PATH inside the test
+    // env resolves via the embedded node entry; either way the hook exits 0
+    // because every branch ends in `|| true`).
+    const commitOutput = execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "hooked"], {
+      cwd: repoPath,
       encoding: "utf8",
     });
-    expect(out).toBeDefined();
-    expect(sh(repo, "git", "log", "--format=%s", "-1")).toBe("hooked");
+
+    // Assert — the commit went through.
+    expect(commitOutput).toBeDefined();
+    expect(TestFactory.git(repoPath, "git", "log", "--format=%s", "-1")).toBe("hooked");
+  });
+});
+
+describe("multi-provider end-to-end (claude-code + copilot-cli on one repo)", () => {
+  beforeEach(() => clearProviders());
+  afterEach(() => clearProviders());
+
+  it("stamps one commit with sessions from both real providers and reports the sum", async () => {
+    // Arrange — one repo, plus real on-disk fixtures for BOTH providers:
+    // a Claude Code transcript and a Copilot CLI session that each point at it.
+    const repoPath = TestFactory.makeRepo();
+    const repoRoot = TestFactory.git(repoPath, "git", "rev-parse", "--show-toplevel");
+
+    const claudeDir = TestFactory.makeClaudeTranscript({
+      repoRoot,
+      sessionId: "11111111-1111-1111-1111-111111111111",
+      lines: [
+        TestFactory.claudeAssistantLine(
+          "msg_1",
+          "mock-claude",
+          { input: 10, cacheRead: 100, cacheWrite: 5, output: 40 },
+          "2026-07-20T10:00:00.000Z",
+        ),
+      ],
+    });
+
+    const { copilotDir } = TestFactory.makeCopilotSession({
+      closed: true,
+      gitRoot: repoRoot,
+      sessionId: "22222222-2222-2222-2222-222222222222",
+      model: "mock-copilot",
+      // inputTokens include cacheReadTokens (Copilot semantics): input = 50.
+      shutdownUsage: { inputTokens: 300, outputTokens: 60, cacheReadTokens: 250, cacheWriteTokens: 20 },
+      messageOutputs: [],
+    });
+
+    registerProvider(createClaudeCodeProvider({ claudeDir }));
+    registerProvider(createCopilotCliProvider({ copilotDir }));
+
+    // Act — a single commit gets stamped, then reported.
+    const stampedCommit = TestFactory.makeCommit(repoPath, "work with two assistants");
+    await postCommit(repoPath, stampedCommit);
+    const note = readNote(stampedCommit, repoPath);
+    const report = buildReport(repoPath, "HEAD~1..HEAD");
+
+    // Assert — the note carries one session per provider with correct classes
+    // (copilot input = 300 inclusive − 250 cached), and the report sums both.
+    expect(note).not.toBeNull();
+    expect(note!.sessions).toHaveLength(2);
+    const sessionsByProvider = Object.fromEntries(note!.sessions.map((session) => [session.provider, session]));
+    expect(sessionsByProvider["claude-code"]).toMatchObject({
+      model: "mock-claude",
+      input: 10,
+      cacheRead: 100,
+      cacheWrite: 5,
+      output: 40,
+    });
+    expect(sessionsByProvider["copilot-cli"]).toMatchObject({
+      model: "mock-copilot",
+      input: 50,
+      cacheRead: 250,
+      cacheWrite: 20,
+      output: 60,
+    });
+    expect(report.totals.sessions).toBe(2);
+    expect(report.totals.tokens.output).toBe(100);
+    expect(report.totals.tokens.cacheRead).toBe(350);
+    expect(report.unknownModels).toEqual(
+      expect.arrayContaining(["claude-code/mock-claude", "copilot-cli/mock-copilot"]),
+    );
   });
 });
