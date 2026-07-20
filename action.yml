@@ -94,3 +94,18 @@ runs:
         REPO: ${{ github.repository }}
       run: |
         node "${{ github.action_path }}/scripts/pr-comment.mjs" /tmp/wick-report.json
+
+    # Runs after the comment is posted so an over-budget PR still gets its
+    # report. Only fails when .wick/config.json sets budget.enforce = true.
+    - name: Enforce budget
+      if: ${{ inputs.mode == 'report' }}
+      shell: bash
+      run: |
+        node -e '
+          const b = JSON.parse(require("fs").readFileSync("/tmp/wick-report.json", "utf8")).budget;
+          if (b && b.enforce && b.status === "over") {
+            console.error(`wick: PR is over budget: $${b.usedUsd.toFixed(2)} spent, budget is $${b.limitUsd.toFixed(2)}`);
+            process.exit(1);
+          }
+          if (b) console.log(`wick: budget ${b.status} (${b.usedUsd === null ? "n/a" : "$" + b.usedUsd.toFixed(2)} of $${b.limitUsd.toFixed(2)})`);
+        '

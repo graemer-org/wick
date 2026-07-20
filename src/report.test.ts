@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildBadge, renderBadgeSvg, type Report } from "./report.js";
+import {
+  buildBadge,
+  evaluateBudget,
+  renderBadgeSvg,
+  renderReport,
+  type Report,
+} from "./report.js";
 
 function reportWithCost(costUsd: number | null): Report {
   return {
@@ -46,6 +52,51 @@ describe("buildBadge", () => {
 
   it("accepts a custom label", () => {
     expect(buildBadge(reportWithCost(1), "AI spend").label).toBe("AI spend");
+  });
+});
+
+describe("evaluateBudget", () => {
+  const cfg = { pr: 20, warnAt: 0.8, enforce: false };
+
+  it("is ok below the warn threshold", () => {
+    expect(evaluateBudget(10, cfg)).toMatchObject({ status: "ok", usedFraction: 0.5 });
+  });
+
+  it("warns at exactly the warn fraction", () => {
+    expect(evaluateBudget(16, cfg).status).toBe("warn");
+  });
+
+  it("stays warn at exactly 100% and flips over beyond it", () => {
+    expect(evaluateBudget(20, cfg).status).toBe("warn");
+    expect(evaluateBudget(20.01, cfg).status).toBe("over");
+  });
+
+  it("is unknown when the cost is unknown, and never enforces a guess", () => {
+    const b = evaluateBudget(null, { ...cfg, enforce: true });
+    expect(b.status).toBe("unknown");
+    expect(b.usedUsd).toBeNull();
+  });
+
+  it("passes the enforce flag through", () => {
+    expect(evaluateBudget(25, { ...cfg, enforce: true }).enforce).toBe(true);
+  });
+});
+
+describe("renderReport budget line", () => {
+  it("renders the budget bar when a budget is present", () => {
+    const report = reportWithCost(18);
+    report.budget = evaluateBudget(18, { pr: 20, warnAt: 0.8, enforce: false });
+    const out = renderReport(report);
+    expect(out).toContain("budget $20.00");
+    expect(out).toContain("approaching budget");
+  });
+
+  it("shows the overage and enforcement", () => {
+    const report = reportWithCost(25);
+    report.budget = evaluateBudget(25, { pr: 20, warnAt: 0.8, enforce: true });
+    const out = renderReport(report);
+    expect(out).toContain("over by $5.00");
+    expect(out).toContain("check fails");
   });
 });
 

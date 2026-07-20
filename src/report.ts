@@ -1,3 +1,4 @@
+import { loadConfig, type BudgetConfig } from "./config.js";
 import { defaultBranch, git, repoRoot, tryGit } from "./git.js";
 import { readNote } from "./notes.js";
 import { costUsd, loadPricing } from "./pricing.js";
@@ -22,10 +23,21 @@ export interface AuthorReport {
   costUsd: number | null;
 }
 
+export interface BudgetReport {
+  limitUsd: number;
+  /** null when no model in range had pricing. */
+  usedUsd: number | null;
+  usedFraction: number | null;
+  status: "ok" | "warn" | "over" | "unknown";
+  enforce: boolean;
+}
+
 export interface Report {
   range: string;
   commits: CommitReport[];
   authors: AuthorReport[];
+  /** Present when .wick/config.json defines a PR budget and the range is branch-scoped. */
+  budget?: BudgetReport;
   totals: {
     tokens: { input: number; cacheRead: number; cacheWrite: number; output: number };
     costUsd: number | null;
@@ -53,6 +65,27 @@ export function resolveRange(cwd: string, explicit?: string): string {
     }
   }
   return "HEAD";
+}
+
+/** Evaluate spend against a configured budget. Pure — unit-tested directly. */
+export function evaluateBudget(spentUsd: number | null, cfg: BudgetConfig): BudgetReport {
+  if (spentUsd === null) {
+    return {
+      limitUsd: cfg.pr,
+      usedUsd: null,
+      usedFraction: null,
+      status: "unknown",
+      enforce: cfg.enforce,
+    };
+  }
+  const fraction = spentUsd / cfg.pr;
+  return {
+    limitUsd: cfg.pr,
+    usedUsd: spentUsd,
+    usedFraction: fraction,
+    status: fraction > 1 ? "over" : fraction >= cfg.warnAt ? "warn" : "ok",
+    enforce: cfg.enforce,
+  };
 }
 
 export function buildReport(cwd: string, rangeArg?: string): Report {
@@ -163,7 +196,7 @@ export function buildReport(cwd: string, rangeArg?: string): Report {
     }))
     .sort((x, y) => (y.costUsd ?? 0) - (x.costUsd ?? 0));
 
-  return {
+  const report: Report = {
     range,
     commits,
     authors,
@@ -176,6 +209,14 @@ export function buildReport(cwd: string, rangeArg?: string): Report {
     },
     unknownModels: [...unknownModels],
   };
+
+  // Budgets are per PR/branch — a full-history report ("HEAD" on the default
+  // branch) compared against a PR budget would always read as blown.
+  const budgetCfg = loadConfig(root).budget;
+  if (budgetCfg && range !== "HEAD") {
+    report.budget = evaluateBudget(report.totals.costUsd, budgetCfg);
+  }
+  return report;
 }
 
 function fmtTokens(n: number): string {
@@ -367,6 +408,28 @@ export function renderReport(report: Report, opts: RenderOptions = {}): string {
   const flavor = costFlavor(t.costUsd);
   if (flavor && t.stampedCommits > 0) {
     lines.push(dim(`   ≈ ${flavor}`));
+  }
+
+  if (report.budget) {
+    const b = report.budget;
+    if (b.status === "unknown") {
+      lines.push(yellow(`🎯 budget $${b.limitUsd.toFixed(2)} — spend unknown (no pricing)`));
+    } else {
+      const frac = b.usedFraction ?? 0;
+      const filled = Math.min(BAR_W, Math.max(frac > 0 ? 1 : 0, Math.round(frac * BAR_W)));
+      const bar = "█".repeat(filled) + dim("░".repeat(BAR_W - filled));
+      const painted = b.status === "over" ? red(bar) : b.status === "warn" ? yellow(bar) : green(bar);
+      const pct = `${Math.round(frac * 100)}%`;
+      const tail =
+        b.status === "over"
+          ? red(bold(`over by $${((b.usedUsd ?? 0) - b.limitUsd).toFixed(2)}${b.enforce ? " — check fails" : ""}`))
+          : b.status === "warn"
+            ? yellow(`${pct} — approaching budget`)
+            : dim(pct);
+      lines.push(
+        `🎯 ${bold(`budget $${b.limitUsd.toFixed(2)}`)} ${painted} $${(b.usedUsd ?? 0).toFixed(2)} ${tail}`,
+      );
+    }
   }
 
   if (report.authors.length > 0) {
