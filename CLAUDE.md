@@ -38,5 +38,7 @@ Data flow: provider transcripts → attribution delta → git note per commit �
 ## Conventions
 
 - Conventional Commits (`feat:`, `fix:`, `ci:`, `docs:` …). release-please cuts releases from them — never hand-bump the version in `package.json` or edit `CHANGELOG.md`.
+- **Releases are Patrick's job — never do a release autonomously.** Do not merge release-please PRs (`chore(main): release …`), create tags, publish GitHub releases, or trigger the Release workflow. Ship changes via normal PRs and stop there.
+- License is Business Source License 1.1 (source-available, not open source) — a future B2B SaaS may be built on Wick. Don't relicense, don't add dependencies with copyleft licenses, and keep the `LICENSE` parameters block intact.
 - This repo dogfoods Wick: `npm install` auto-installs the hooks via `scripts/prepare.mjs` (skipped in CI / as a dependency; opt-out `WICK_AUTOINSTALL=0`), so local commits get stamped. Don't be surprised by `refs/notes/wick` activity or `.git/wick/` state.
 - Pricing lives in bundled `pricing.json` (USD per 1M tokens, keyed by provider + model prefix), overridable per-repo via `.wick/pricing.json`.
