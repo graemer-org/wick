@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/graemer-org/wick/compare/v0.4.0...v0.4.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* double-counted fixup stamps when notes.rewriteMode=overwrite ([#19](https://github.com/graemer-org/wick/issues/19)) ([7ef0cac](https://github.com/graemer-org/wick/commit/7ef0cac267bc1603f47bf73ceb8f97b90a1c7299))
+
 ## [0.4.0](https://github.com/graemer-org/wick/compare/v0.3.0...v0.4.0) (2026-07-20)
 
 
