@@ -37,6 +37,23 @@ export function hooksDir(cwd: string): string {
   );
 }
 
+/**
+ * The remote wick should sync notes with: the current branch's configured
+ * upstream remote, else `origin`, else the first configured remote, else null
+ * (no remote — a purely local repo).
+ */
+export function notesRemote(cwd: string): string | null {
+  const branch = tryGit(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+  if (branch && branch !== "HEAD") {
+    const upstream = tryGit(["config", `branch.${branch}.remote`], cwd);
+    if (upstream) return upstream;
+  }
+  if (tryGit(["config", "remote.origin.url"], cwd) !== null) return "origin";
+  const remotes = tryGit(["remote"], cwd);
+  const first = remotes?.split("\n").map((r) => r.trim()).find(Boolean);
+  return first ?? null;
+}
+
 export function defaultBranch(cwd: string): string | null {
   const originHead = tryGit(
     ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],

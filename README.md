@@ -47,7 +47,7 @@ wick status                # hooks installed? sessions detected?
 
 ## PR comments via GitHub Action
 
-Notes travel with your pushes automatically — `wick install` wires a `pre-push` hook that ships `refs/notes/wick` alongside your branches (manual: `git push origin refs/notes/wick`).
+Notes travel with your pushes automatically — `wick install` wires a `pre-push` hook that ships `refs/notes/wick` alongside your branches (manual: `git push origin refs/notes/wick`). In the other direction, `wick report` auto-fetches notes from the remote before it reads, so a fresh clone shows costs without a manual `git fetch refs/notes/wick` — git doesn't sync notes on `clone`/`fetch` by default. The pull is a non-destructive merge (your unpushed local stamps are never clobbered); pass `--no-fetch` to skip it, e.g. when offline.
 
 Add the action to your workflow — two jobs: one posts the comment while the PR is open, one remaps stamps after a squash or rebase merge:
 
