@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/graemer-org/wick/compare/v0.2.0...v0.3.0) (2026-07-20)
+
+
+### Features
+
+* cost badge — wick badge command, publishing workflow, dogfooded in the README ([#7](https://github.com/graemer-org/wick/issues/7)) ([71e3b9c](https://github.com/graemer-org/wick/commit/71e3b9cd28181c12eaec32bef65506ad25bff23f))
+* liven up the report and PR comment ([#5](https://github.com/graemer-org/wick/issues/5)) ([718abc3](https://github.com/graemer-org/wick/commit/718abc3d507ee92ff16ef054a78381e43ac3079a))
+
 ## [0.2.0](https://github.com/graemer-org/wick/compare/v0.1.0...v0.2.0) (2026-07-19)
 
 
