@@ -12,8 +12,6 @@ export interface BudgetConfig {
   pr: number;
   /** Fraction of the budget at which the report starts warning. */
   warnAt: number;
-  /** Fail the GitHub Action check when a PR exceeds the budget. */
-  enforce: boolean;
 }
 
 export interface WickConfig {
@@ -35,7 +33,7 @@ export function loadConfig(repoRoot: string): WickConfig {
     if (typeof b.pr === "number" && Number.isFinite(b.pr) && b.pr > 0) {
       const warnAt =
         typeof b.warnAt === "number" && b.warnAt > 0 && b.warnAt <= 1 ? b.warnAt : 0.8;
-      cfg.budget = { pr: b.pr, warnAt, enforce: b.enforce === true };
+      cfg.budget = { pr: b.pr, warnAt };
     }
   }
   return cfg;

@@ -29,7 +29,6 @@ export interface BudgetReport {
   usedUsd: number | null;
   usedFraction: number | null;
   status: "ok" | "warn" | "over" | "unknown";
-  enforce: boolean;
 }
 
 export interface Report {
@@ -67,16 +66,15 @@ export function resolveRange(cwd: string, explicit?: string): string {
   return "HEAD";
 }
 
-/** Evaluate spend against a configured budget. Pure — unit-tested directly. */
+/**
+ * Evaluate spend against a configured budget. Pure — unit-tested directly.
+ * Budgets inform, they never block: an over-budget PR cannot get cheaper
+ * (spend only grows), so there is deliberately no failing/enforce mode —
+ * "over" surfaces as a warning in the report, comment, and CI annotation.
+ */
 export function evaluateBudget(spentUsd: number | null, cfg: BudgetConfig): BudgetReport {
   if (spentUsd === null) {
-    return {
-      limitUsd: cfg.pr,
-      usedUsd: null,
-      usedFraction: null,
-      status: "unknown",
-      enforce: cfg.enforce,
-    };
+    return { limitUsd: cfg.pr, usedUsd: null, usedFraction: null, status: "unknown" };
   }
   const fraction = spentUsd / cfg.pr;
   return {
@@ -84,7 +82,6 @@ export function evaluateBudget(spentUsd: number | null, cfg: BudgetConfig): Budg
     usedUsd: spentUsd,
     usedFraction: fraction,
     status: fraction > 1 ? "over" : fraction >= cfg.warnAt ? "warn" : "ok",
-    enforce: cfg.enforce,
   };
 }
 
@@ -422,7 +419,7 @@ export function renderReport(report: Report, opts: RenderOptions = {}): string {
       const pct = `${Math.round(frac * 100)}%`;
       const tail =
         b.status === "over"
-          ? red(bold(`over by $${((b.usedUsd ?? 0) - b.limitUsd).toFixed(2)}${b.enforce ? " — check fails" : ""}`))
+          ? red(bold(`over by $${((b.usedUsd ?? 0) - b.limitUsd).toFixed(2)}`))
           : b.status === "warn"
             ? yellow(`${pct} — approaching budget`)
             : dim(pct);

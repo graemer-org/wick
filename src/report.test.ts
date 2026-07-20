@@ -56,7 +56,7 @@ describe("buildBadge", () => {
 });
 
 describe("evaluateBudget", () => {
-  const cfg = { pr: 20, warnAt: 0.8, enforce: false };
+  const cfg = { pr: 20, warnAt: 0.8 };
 
   it("is ok below the warn threshold", () => {
     expect(evaluateBudget(10, cfg)).toMatchObject({ status: "ok", usedFraction: 0.5 });
@@ -71,32 +71,28 @@ describe("evaluateBudget", () => {
     expect(evaluateBudget(20.01, cfg).status).toBe("over");
   });
 
-  it("is unknown when the cost is unknown, and never enforces a guess", () => {
-    const b = evaluateBudget(null, { ...cfg, enforce: true });
+  it("is unknown when the cost is unknown", () => {
+    const b = evaluateBudget(null, cfg);
     expect(b.status).toBe("unknown");
     expect(b.usedUsd).toBeNull();
-  });
-
-  it("passes the enforce flag through", () => {
-    expect(evaluateBudget(25, { ...cfg, enforce: true }).enforce).toBe(true);
   });
 });
 
 describe("renderReport budget line", () => {
   it("renders the budget bar when a budget is present", () => {
     const report = reportWithCost(18);
-    report.budget = evaluateBudget(18, { pr: 20, warnAt: 0.8, enforce: false });
+    report.budget = evaluateBudget(18, { pr: 20, warnAt: 0.8 });
     const out = renderReport(report);
     expect(out).toContain("budget $20.00");
     expect(out).toContain("approaching budget");
   });
 
-  it("shows the overage and enforcement", () => {
+  it("shows the overage without any enforcement language", () => {
     const report = reportWithCost(25);
-    report.budget = evaluateBudget(25, { pr: 20, warnAt: 0.8, enforce: true });
+    report.budget = evaluateBudget(25, { pr: 20, warnAt: 0.8 });
     const out = renderReport(report);
     expect(out).toContain("over by $5.00");
-    expect(out).toContain("check fails");
+    expect(out).not.toContain("check fails");
   });
 });
 

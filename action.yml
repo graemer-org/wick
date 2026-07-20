@@ -95,17 +95,19 @@ runs:
       run: |
         node "${{ github.action_path }}/scripts/pr-comment.mjs" /tmp/wick-report.json
 
-    # Runs after the comment is posted so an over-budget PR still gets its
-    # report. Only fails when .wick/config.json sets budget.enforce = true.
-    - name: Enforce budget
+    # Budgets inform, they never block: an over-budget PR can't get cheaper,
+    # so failing the check would dead-end the PR (you could keep committing
+    # but never merge). Over budget → a workflow warning annotation instead.
+    - name: Budget annotation
       if: ${{ inputs.mode == 'report' }}
       shell: bash
       run: |
         node -e '
           const b = JSON.parse(require("fs").readFileSync("/tmp/wick-report.json", "utf8")).budget;
-          if (b && b.enforce && b.status === "over") {
-            console.error(`wick: PR is over budget: $${b.usedUsd.toFixed(2)} spent, budget is $${b.limitUsd.toFixed(2)}`);
-            process.exit(1);
-          }
-          if (b) console.log(`wick: budget ${b.status} (${b.usedUsd === null ? "n/a" : "$" + b.usedUsd.toFixed(2)} of $${b.limitUsd.toFixed(2)})`);
+          if (!b) process.exit(0);
+          const used = b.usedUsd === null ? "n/a" : `$${b.usedUsd.toFixed(2)}`;
+          const line = `${used} of $${b.limitUsd.toFixed(2)} (${b.status})`;
+          if (b.status === "over") console.log(`::warning title=Wick budget::PR is over budget — ${line}`);
+          else if (b.status === "warn") console.log(`::notice title=Wick budget::PR is approaching its budget — ${line}`);
+          else console.log(`wick budget: ${line}`);
         '

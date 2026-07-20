@@ -53,7 +53,7 @@ const budgetLines = (() => {
   const bar = cell.repeat(filled) + "⬜".repeat(10 - filled);
   const tail =
     b.status === "over"
-      ? `**over by ${fmtCost(b.usedUsd - b.limitUsd)}**${b.enforce ? " — ❌ budget check fails" : ""}`
+      ? `**over by ${fmtCost(b.usedUsd - b.limitUsd)}**`
       : b.status === "warn"
         ? `${Math.round(frac * 100)}% — approaching budget`
         : `${Math.round(frac * 100)}%`;
