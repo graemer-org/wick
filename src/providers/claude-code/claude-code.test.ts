@@ -44,6 +44,7 @@ function setupClaudeDir(repoRoot: string, lines: string[]): string {
 
 describe("encodeProjectPath", () => {
   it("matches the observed on-disk encoding", () => {
+    // Act + Assert
     expect(
       encodeProjectPath("/workspace/wick/.claude/worktrees/bridge-cse_0111a"),
     ).toBe("-workspace-wick--claude-worktrees-bridge-cse-0111a");
@@ -52,6 +53,7 @@ describe("encodeProjectPath", () => {
 
 describe("claude-code provider", () => {
   it("dedupes streaming snapshots by message.id, keeping the last occurrence", async () => {
+    // Arrange
     const repo = "/fake/repo";
     const claudeDir = setupClaudeDir(repo, [
       assistantLine("msg_1", "claude-fable-5", { input: 10, output: 100 }),
@@ -59,8 +61,12 @@ describe("claude-code provider", () => {
       assistantLine("msg_2", "claude-fable-5", { input: 5, output: 50, cacheRead: 1000, cacheWrite: 200 }),
     ]);
     const provider = createClaudeCodeProvider({ claudeDir });
+
+    // Act
     const [ref] = await provider.discoverSessions(repo, {});
     const usage = await provider.getUsage(ref);
+
+    // Assert
     expect(usage.sessionId).toBe(SESSION_ID);
     expect(usage.perModel).toHaveLength(1);
     const m = usage.perModel[0];
@@ -71,14 +77,19 @@ describe("claude-code provider", () => {
   });
 
   it("tracks usage per model and first/last timestamps", async () => {
+    // Arrange
     const repo = "/fake/repo2";
     const claudeDir = setupClaudeDir(repo, [
       assistantLine("msg_a", "claude-fable-5", { output: 10 }, "2026-07-19T10:00:00.000Z"),
       assistantLine("msg_b", "claude-haiku-4-5", { output: 20 }, "2026-07-19T11:00:00.000Z"),
     ]);
     const provider = createClaudeCodeProvider({ claudeDir });
+
+    // Act
     const [ref] = await provider.discoverSessions(repo, {});
     const usage = await provider.getUsage(ref);
+
+    // Assert
     expect(usage.perModel.map((m) => m.model).sort()).toEqual([
       "claude-fable-5",
       "claude-haiku-4-5",
@@ -88,6 +99,7 @@ describe("claude-code provider", () => {
   });
 
   it("survives corrupt lines and non-assistant records", async () => {
+    // Arrange
     const repo = "/fake/repo3";
     const claudeDir = setupClaudeDir(repo, [
       "this is not json {{{",
@@ -97,12 +109,17 @@ describe("claude-code provider", () => {
       "", // blank
     ]);
     const provider = createClaudeCodeProvider({ claudeDir });
+
+    // Act
     const [ref] = await provider.discoverSessions(repo, {});
     const usage = await provider.getUsage(ref);
+
+    // Assert
     expect(usage.perModel[0].output).toBe(42);
   });
 
   it("includes subagent transcripts under <session-id>/subagents/", async () => {
+    // Arrange
     const repo = "/fake/repo4";
     const claudeDir = setupClaudeDir(repo, [
       assistantLine("msg_main", "claude-fable-5", { output: 100 }),
@@ -120,18 +137,29 @@ describe("claude-code provider", () => {
       assistantLine("msg_sub", "claude-fable-5", { output: 30 }),
     );
     const provider = createClaudeCodeProvider({ claudeDir });
+
+    // Act
     const [ref] = await provider.discoverSessions(repo, {});
     const usage = await provider.getUsage(ref);
+
+    // Assert
     expect(usage.perModel[0].output).toBe(130);
   });
 
   it("returns an empty session list when the repo has no transcripts", async () => {
+    // Arrange
     const claudeDir = mkdtempSync(path.join(tmpdir(), "wick-claude-empty-"));
     const provider = createClaudeCodeProvider({ claudeDir });
-    expect(await provider.discoverSessions("/nowhere", {})).toEqual([]);
+
+    // Act
+    const refs = await provider.discoverSessions("/nowhere", {});
+
+    // Assert
+    expect(refs).toEqual([]);
   });
 
   it("ignores non-session files like *.ccr-tip.json", async () => {
+    // Arrange
     const repo = "/fake/repo5";
     const claudeDir = setupClaudeDir(repo, [
       assistantLine("m", "claude-fable-5", { output: 1 }),
@@ -140,7 +168,11 @@ describe("claude-code provider", () => {
     writeFileSync(path.join(projectDir, `${SESSION_ID}.ccr-tip.json`), "{}");
     writeFileSync(path.join(projectDir, "not-a-uuid.jsonl"), "{}");
     const provider = createClaudeCodeProvider({ claudeDir });
+
+    // Act
     const refs = await provider.discoverSessions(repo, {});
+
+    // Assert
     expect(refs).toHaveLength(1);
     expect(refs[0].id).toBe(SESSION_ID);
   });

@@ -26,10 +26,12 @@ function usage(
 
 describe("computeDelta", () => {
   it("attributes a session spanning 3 commits without double-counting", () => {
+    // Arrange
     // Simulate a session growing across three commits.
     let state = emptyState();
     const stampsPerCommit: number[] = [];
 
+    // Act
     for (const total of [100, 250, 400]) {
       const { stamps, newState } = computeDelta(
         [usage("s1", "claude-fable-5", { output: total })],
@@ -39,18 +41,25 @@ describe("computeDelta", () => {
       state = newState;
     }
 
+    // Assert
     expect(stampsPerCommit).toEqual([100, 150, 150]);
     // Sum of stamps == session total.
     expect(stampsPerCommit.reduce((a, b) => a + b, 0)).toBe(400);
   });
 
   it("emits no stamp when nothing changed", () => {
+    // Arrange
     const first = computeDelta([usage("s1", "m", { output: 100 })], emptyState());
+
+    // Act
     const second = computeDelta([usage("s1", "m", { output: 100 })], first.newState);
+
+    // Assert
     expect(second.stamps).toEqual([]);
   });
 
   it("keeps per-model deltas separate", () => {
+    // Act
     const first = computeDelta(
       [
         {
@@ -66,34 +75,51 @@ describe("computeDelta", () => {
       ],
       emptyState(),
     );
+
+    // Assert
     expect(first.stamps).toHaveLength(2);
     expect(first.stamps.find((s) => s.model === "a")?.output).toBe(10);
     expect(first.stamps.find((s) => s.model === "b")?.output).toBe(20);
   });
 
   it("keeps baselines for sessions absent from the current scan", () => {
+    // Arrange
     const first = computeDelta([usage("s1", "m", { output: 100 })], emptyState());
     // s1's transcript temporarily unreadable; only s2 is seen.
     const second = computeDelta([usage("s2", "m", { output: 5 })], first.newState);
+
+    // Act
     // s1 reappears with more usage — only the delta since its baseline counts.
     const third = computeDelta([usage("s1", "m", { output: 120 })], second.newState);
+
+    // Assert
     expect(third.stamps).toHaveLength(1);
     expect(third.stamps[0].output).toBe(20);
   });
 
   it("clamps negative deltas (e.g. truncated transcript) to zero", () => {
+    // Arrange
     const first = computeDelta([usage("s1", "m", { output: 100 })], emptyState());
+
+    // Act
     const second = computeDelta([usage("s1", "m", { output: 50 })], first.newState);
+
+    // Assert
     expect(second.stamps).toEqual([]);
   });
 
   it("never lowers baselines on a shrunken read, so already-stamped tokens are not re-stamped", () => {
+    // Arrange
     const first = computeDelta([usage("s1", "m", { output: 100 })], emptyState());
+
+    // Act
     // A read racing with the provider rewriting the transcript reports less.
     const second = computeDelta([usage("s1", "m", { output: 40 })], first.newState);
-    expect(second.stamps).toEqual([]);
     // The file recovers; only genuinely new tokens are stamped.
     const third = computeDelta([usage("s1", "m", { output: 120 })], second.newState);
+
+    // Assert
+    expect(second.stamps).toEqual([]);
     expect(third.stamps).toHaveLength(1);
     expect(third.stamps[0].output).toBe(20);
   });
@@ -101,6 +127,7 @@ describe("computeDelta", () => {
 
 describe("mergeNotes", () => {
   it("sums entries with the same (id, provider, model) and keeps distinct ones", () => {
+    // Act
     const merged = mergeNotes(
       {
         v: 1,
@@ -116,6 +143,8 @@ describe("mergeNotes", () => {
         ],
       },
     );
+
+    // Assert
     expect(merged.sessions).toHaveLength(2);
     const s1 = merged.sessions.find((s) => s.id === "s1")!;
     expect(s1).toMatchObject({ input: 11, cacheRead: 22, cacheWrite: 33, output: 44 });
@@ -131,20 +160,29 @@ describe("mergeNoteVersions", () => {
   });
 
   it("does not double-count when one side is a stale copy of the other", () => {
+    // Act
     // remote holds the old version of the stamp, local the upserted newer one
     const merged = mergeNoteVersions(note("s1", 150), note("s1", 100));
+
+    // Assert
     expect(merged.sessions).toHaveLength(1);
     expect(merged.sessions[0].output).toBe(150); // max, not 250
   });
 
   it("is a no-op for identical versions", () => {
+    // Act
     const merged = mergeNoteVersions(note("s1", 100), note("s1", 100));
+
+    // Assert
     expect(merged.sessions).toHaveLength(1);
     expect(merged.sessions[0].output).toBe(100);
   });
 
   it("carries over entries unique to either side (other-machine sessions)", () => {
+    // Act
     const merged = mergeNoteVersions(note("local-session", 10), note("remote-session", 20));
+
+    // Assert
     expect(merged.sessions).toHaveLength(2);
     expect(merged.sessions.map((s) => s.output).sort()).toEqual([10, 20]);
   });

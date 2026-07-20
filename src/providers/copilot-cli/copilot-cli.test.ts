@@ -72,26 +72,39 @@ function fixture(o: { closed: boolean; gitRoot?: string }): { copilotDir: string
 
 describe("copilot-cli provider", () => {
   it("discovers sessions whose gitRoot matches the repo root", async () => {
+    // Arrange
     const { copilotDir, repo } = fixture({ closed: true });
     const provider = createCopilotCliProvider({ copilotDir });
+
+    // Act
     const refs = await provider.discoverSessions(repo, {});
+
+    // Assert
     expect(refs).toHaveLength(1);
     expect(refs[0]).toMatchObject({ id: SESSION_ID, provider: "copilot-cli" });
   });
 
   it("ignores sessions from other repos and missing state dirs", async () => {
+    // Arrange — a session pointing at a different gitRoot.
     const { copilotDir, repo } = fixture({ closed: true, gitRoot: "/somewhere/else" });
     const provider = createCopilotCliProvider({ copilotDir });
-    expect(await provider.discoverSessions(repo, {})).toHaveLength(0);
     const empty = createCopilotCliProvider({ copilotDir: "/nonexistent/copilot" });
+
+    // Act + Assert — neither the mismatched session nor a missing dir yields refs.
+    expect(await provider.discoverSessions(repo, {})).toHaveLength(0);
     expect(await empty.discoverSessions(repo, {})).toHaveLength(0);
   });
 
   it("reads full usage from session.shutdown and subtracts cache reads from input", async () => {
+    // Arrange
     const { copilotDir, repo } = fixture({ closed: true });
     const provider = createCopilotCliProvider({ copilotDir });
     const [ref] = await provider.discoverSessions(repo, {});
+
+    // Act
     const usage = await provider.getUsage(ref);
+
+    // Assert
     expect(usage.perModel).toHaveLength(1);
     expect(usage.perModel[0]).toEqual({
       model: "claude-opus-4.8",
@@ -105,10 +118,15 @@ describe("copilot-cli provider", () => {
   });
 
   it("falls back to partial output tokens for a live session without DB rows", async () => {
+    // Arrange — session has no shutdown event and no session-store rows.
     const { copilotDir, repo } = fixture({ closed: false });
     const provider = createCopilotCliProvider({ copilotDir });
     const [ref] = await provider.discoverSessions(repo, {});
+
+    // Act
     const usage = await provider.getUsage(ref);
+
+    // Assert — only the output lower bound is known.
     expect(usage.perModel).toEqual([
       { model: "claude-opus-4.8", input: 0, cacheRead: 0, cacheWrite: 0, output: 150 },
     ]);
@@ -126,6 +144,8 @@ describe("copilot-cli provider", () => {
   it.skipIf(!hasSqlite3)(
     "prefers session-store.db rows for a live session (same inclusive-input semantics)",
     async () => {
+      // Arrange — live session plus per-request rows in the central store
+      // (including a foreign session that must not leak into the sums).
       const { copilotDir, repo } = fixture({ closed: false });
       const db = path.join(copilotDir, "session-store.db");
       execFileSync("sqlite3", [
@@ -141,7 +161,11 @@ describe("copilot-cli provider", () => {
       ]);
       const provider = createCopilotCliProvider({ copilotDir });
       const [ref] = await provider.discoverSessions(repo, {});
+
+      // Act
       const usage = await provider.getUsage(ref);
+
+      // Assert
       expect(usage.perModel).toEqual([
         {
           model: "claude-opus-4.8",
