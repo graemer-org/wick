@@ -157,4 +157,4 @@ npm test               # vitest
 
 ## License
 
-MIT
+[Business Source License 1.1](LICENSE). In practice: use Wick freely — in development and in production, personally or at your company. What you may not do is offer Wick itself (or a product that competes with the licensor's paid Wick offerings) as a commercial or hosted service. Each version automatically converts to Apache 2.0 four years after its release. For commercial licensing, contact [@pgraemer](https://github.com/pgraemer).
