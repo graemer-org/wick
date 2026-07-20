@@ -31,7 +31,7 @@ No server, no telemetry, no account. Everything lives in git and on your machine
 ## Quick start
 
 ```bash
-npm install -g wick        # or: npx wick …
+npm install -g @wickhq/wick   # installs the `wick` command (or: npx @wickhq/wick …)
 cd your-repo
 wick install               # installs chain-safe git hooks, done
 ```
