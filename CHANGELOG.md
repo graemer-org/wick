@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.0](https://github.com/graemer-org/wick/compare/v0.5.0...v0.6.0) (2026-07-20)
+
+
+### Features
+
+* auto-fetch notes on wick report so fresh checkouts show costs ([#27](https://github.com/graemer-org/wick/issues/27)) ([59a1e0b](https://github.com/graemer-org/wick/commit/59a1e0bec7d44036197632cf808555304085043a))
+* expand pricing table with current Claude and Copilot models ([#28](https://github.com/graemer-org/wick/issues/28)) ([061f718](https://github.com/graemer-org/wick/commit/061f71880bcc4bd939ae14779855f9fc4fd71e9b))
+* GitHub Copilot CLI usage provider ([#25](https://github.com/graemer-org/wick/issues/25)) ([4fe9065](https://github.com/graemer-org/wick/commit/4fe90659ad32f7f535ae7a1e0ea4aeff5dc074b9))
+
 ## [0.5.0](https://github.com/graemer-org/wick/compare/v0.4.1...v0.5.0) (2026-07-20)
 
 
