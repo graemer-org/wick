@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeDelta, emptyState, mergeNotes } from "./attribution.js";
+import { computeDelta, emptyState, mergeNotes, mergeNoteVersions } from "./attribution.js";
 import type { SessionUsage } from "./providers/types.js";
 
 function usage(
@@ -119,5 +119,33 @@ describe("mergeNotes", () => {
     expect(merged.sessions).toHaveLength(2);
     const s1 = merged.sessions.find((s) => s.id === "s1")!;
     expect(s1).toMatchObject({ input: 11, cacheRead: 22, cacheWrite: 33, output: 44 });
+  });
+});
+
+describe("mergeNoteVersions", () => {
+  const note = (id: string, output: number) => ({
+    v: 1 as const,
+    sessions: [
+      { id, provider: "p", model: "m", input: 0, cacheRead: 0, cacheWrite: 0, output },
+    ],
+  });
+
+  it("does not double-count when one side is a stale copy of the other", () => {
+    // remote holds the old version of the stamp, local the upserted newer one
+    const merged = mergeNoteVersions(note("s1", 150), note("s1", 100));
+    expect(merged.sessions).toHaveLength(1);
+    expect(merged.sessions[0].output).toBe(150); // max, not 250
+  });
+
+  it("is a no-op for identical versions", () => {
+    const merged = mergeNoteVersions(note("s1", 100), note("s1", 100));
+    expect(merged.sessions).toHaveLength(1);
+    expect(merged.sessions[0].output).toBe(100);
+  });
+
+  it("carries over entries unique to either side (other-machine sessions)", () => {
+    const merged = mergeNoteVersions(note("local-session", 10), note("remote-session", 20));
+    expect(merged.sessions).toHaveLength(2);
+    expect(merged.sessions.map((s) => s.output).sort()).toEqual([10, 20]);
   });
 });

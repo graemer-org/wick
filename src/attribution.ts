@@ -123,3 +123,31 @@ export function mergeNotes(a: NoteData, b: NoteData): NoteData {
   }
   return { v: 1, sessions: [...byKey.values()] };
 }
+
+/**
+ * Merge two VERSIONS of the same note (local vs remote copy that diverged),
+ * taking the per-class MAX for entries with the same (id, provider, model).
+ *
+ * Not mergeNotes: that sums, which is right when combining fresh deltas into
+ * one stamp but double-counts when one side is simply a stale copy of the
+ * other. A stamp's counts for a given session key only ever grow (upsert
+ * merges more delta in), so max reconciles stale-vs-fresh correctly, and
+ * entries unique to one side (e.g. stamps from another machine — session ids
+ * are unique per machine) are carried over as-is.
+ */
+export function mergeNoteVersions(a: NoteData, b: NoteData): NoteData {
+  const byKey = new Map<string, NoteSession>();
+  for (const s of [...a.sessions, ...b.sessions]) {
+    const key = `${s.provider}:${s.id}:${s.model}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.input = Math.max(existing.input, s.input);
+      existing.cacheRead = Math.max(existing.cacheRead, s.cacheRead);
+      existing.cacheWrite = Math.max(existing.cacheWrite, s.cacheWrite);
+      existing.output = Math.max(existing.output, s.output);
+    } else {
+      byKey.set(key, { ...s });
+    }
+  }
+  return { v: 1, sessions: [...byKey.values()] };
+}
