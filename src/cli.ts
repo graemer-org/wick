@@ -1,21 +1,28 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { registerProvider, getProviders } from "./providers/types.js";
 import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { install, uninstall, hasWickBlock, HOOK_EVENTS } from "./install.js";
 import { postCommit, postMerge, postRewrite } from "./hooks/index.js";
-import { buildReport, renderReport } from "./report.js";
+import { buildBadge, buildReport, renderBadgeSvg, renderReport } from "./report.js";
 import { repoRoot, tryGit } from "./git.js";
 import { loadState } from "./state.js";
 import { NOTES_REF } from "./notes.js";
 
 registerProvider(createClaudeCodeProvider());
 
+// dist/cli.js -> ../package.json (package root); keeps --version in sync
+// with release-please bumps.
+const pkg = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+) as { version: string };
+
 const program = new Command();
 program
   .name("wick")
   .description("Measure AI token costs per git commit and PR")
-  .version("0.1.0");
+  .version(pkg.version);
 
 program
   .command("install")
@@ -91,6 +98,20 @@ program
         process.env.NO_COLOR === undefined;
       console.log(renderReport(report, { color }));
     }
+  });
+
+program
+  .command("badge")
+  .description(
+    "shields.io endpoint JSON for the cost of a commit range (default: full history on the default branch)",
+  )
+  .argument("[range]", "git revision range, e.g. HEAD or main..HEAD")
+  .option("--label <label>", "badge label", "🕯️ wick")
+  .option("--svg", "emit a self-hosted SVG instead of endpoint JSON (works on private repos)")
+  .action((range: string | undefined, opts: { label: string; svg?: boolean }) => {
+    const report = buildReport(process.cwd(), range);
+    const badge = buildBadge(report, opts.label);
+    console.log(opts.svg ? renderBadgeSvg(badge) : JSON.stringify(badge));
   });
 
 program

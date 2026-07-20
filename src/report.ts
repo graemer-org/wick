@@ -200,6 +200,81 @@ export function costFlavor(c: number | null): string | null {
   return "somebody's GPU bill 🔥";
 }
 
+/** shields.io endpoint schema: https://shields.io/badges/endpoint-badge */
+export interface Badge {
+  schemaVersion: 1;
+  label: string;
+  message: string;
+  color: string;
+}
+
+/**
+ * Shields.io endpoint JSON for a report — powers the repo's cost badge.
+ * Color heats up with spend; unknown cost renders grey "n/a".
+ */
+export function buildBadge(report: Report, label = "🕯️ wick"): Badge {
+  const c = report.totals.costUsd;
+  if (c === null) {
+    return { schemaVersion: 1, label, message: "n/a", color: "lightgrey" };
+  }
+  const color =
+    c < 10 ? "brightgreen" : c < 100 ? "green" : c < 500 ? "yellow" : c < 2000 ? "orange" : "red";
+  return { schemaVersion: 1, label, message: `$${c.toFixed(2)} burned`, color };
+}
+
+const BADGE_HEX: Record<string, string> = {
+  brightgreen: "#4c1",
+  green: "#97ca00",
+  yellow: "#dfb317",
+  orange: "#fe7d37",
+  red: "#e05d44",
+  lightgrey: "#9f9f9f",
+};
+
+/** Rough Verdana-11px text width: wide for emoji, ~6.6px per regular char. */
+function badgeTextWidth(s: string): number {
+  let w = 0;
+  for (const ch of s) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp === 0xfe0f) continue; // variation selector — zero width
+    w += cp > 0xffff ? 14 : 6.6;
+  }
+  return Math.round(w);
+}
+
+/**
+ * Self-hosted shields-style SVG. Needed because GitHub proxies README images
+ * anonymously — on a private repo shields.io can't reach the endpoint JSON,
+ * while a same-repo SVG is served authenticated to anyone who can see the repo.
+ */
+export function renderBadgeSvg(badge: Badge): string {
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const color = BADGE_HEX[badge.color] ?? badge.color;
+  const lw = badgeTextWidth(badge.label) + 20;
+  const mw = badgeTextWidth(badge.message) + 20;
+  const w = lw + mw;
+  // Shields' flat template: text is drawn at 10x and scaled down for crispness.
+  const text = (x: number, width: number, s: string) =>
+    `<text x="${x * 10}" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="${width * 10}">${esc(s)}</text>` +
+    `<text x="${x * 10}" y="140" transform="scale(.1)" textLength="${width * 10}">${esc(s)}</text>`;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="20" role="img" aria-label="${esc(badge.label)}: ${esc(badge.message)}">` +
+    `<title>${esc(badge.label)}: ${esc(badge.message)}</title>` +
+    `<linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>` +
+    `<clipPath id="r"><rect width="${w}" height="20" rx="3" fill="#fff"/></clipPath>` +
+    `<g clip-path="url(#r)">` +
+    `<rect width="${lw}" height="20" fill="#555"/>` +
+    `<rect x="${lw}" width="${mw}" height="20" fill="${color}"/>` +
+    `<rect width="${w}" height="20" fill="url(#s)"/>` +
+    `</g>` +
+    `<g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" text-rendering="geometricPrecision" font-size="110">` +
+    text(lw / 2, lw - 20, badge.label) +
+    text(lw + mw / 2, mw - 20, badge.message) +
+    `</g></svg>`
+  );
+}
+
 export interface RenderOptions {
   /** Emit ANSI colors. Default false — the CLI enables it on a TTY. */
   color?: boolean;

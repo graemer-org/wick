@@ -1,5 +1,7 @@
 # 🕯️ Wick
 
+[![wick cost](https://github.com/graemer-org/wick/raw/wick-badge/wick-badge.svg)](https://github.com/graemer-org/wick/blob/main/README.md#cost-badge)
+
 **Know what your code costs.** Wick measures AI token spend per commit and rolls it up per Pull Request — so every PR answers the question nobody can answer today: *what did this actually cost to build?*
 
 ```
@@ -65,7 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: your-org/wick@v1
+      - uses: graemer-org/wick@v1
 
   wick-reconcile:
     if: github.event.action == 'closed' && github.event.pull_request.merged == true
@@ -77,11 +79,33 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           fetch-depth: 0
-      - uses: your-org/wick@v1
+      - uses: graemer-org/wick@v1
         with: { mode: reconcile }
 ```
 
 Every PR gets one comment with the total cost (and a per-author split when several people pushed), updated in place on every push — no comment spam. The `reconcile` job detects how the PR was merged: merge commit → nothing to do, squash → all stamps consolidated onto the squash commit, rebase → stamps remapped 1:1. Merge however you like; the costs follow.
+
+## Cost badge
+
+The badge at the top of this README is the live, all-time cost of building Wick. `wick badge` renders it for any commit range:
+
+```bash
+wick badge            # shields.io endpoint JSON for the whole default branch
+# {"schemaVersion":1,"label":"🕯️ wick","message":"$23.41 burned","color":"brightgreen"}
+wick badge --svg      # self-hosted SVG — no shields.io, works on private repos
+```
+
+This repo's [badge workflow](.github/workflows/badge.yml) regenerates both on every push to `main` (and after merge reconciliation) and force-pushes them to an orphan `wick-badge` branch. Embed whichever fits your repo:
+
+```markdown
+<!-- private or public — GitHub serves same-repo images authenticated -->
+![wick cost](https://github.com/<owner>/<repo>/raw/wick-badge/wick-badge.svg)
+
+<!-- public repos can go through shields.io instead -->
+![wick cost](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2F<owner>%2F<repo>%2Fwick-badge%2Fwick-badge.json)
+```
+
+The color heats up as the money burns: green under $10, red past $2,000.
 
 ## Commands
 
@@ -92,6 +116,7 @@ wick status         health check: hooks, providers, last stamp
 wick report [range] per-commit table + by-author breakdown + total cost
                     (default range: merge-base…HEAD)
 wick report --json  machine-readable output
+wick badge [range]  shields.io endpoint JSON for a cost badge
 wick reconcile --onto <sha> <range>
                     copy stamps onto a commit the hooks never saw
                     (manual squash merge, cherry-pick, reset)
@@ -112,7 +137,17 @@ Wick reads what Claude Code writes to disk and dedupes streamed message snapshot
 
 ## Dogfooding
 
-This repo runs Wick on itself. Every PR here carries its own cost comment, and `wick report` on `main` tells you exactly what building Wick has cost so far. If that number ever stops being interesting, we've failed.
+This repo runs Wick on itself. Every PR here carries its own cost comment, the badge up top shows the running total, and `wick report` on `main` tells you exactly what building Wick has cost so far. If that number ever stops being interesting, we've failed.
+
+## Contributing
+
+```bash
+git clone https://github.com/graemer-org/wick.git && cd wick
+npm install            # also builds and installs the wick hooks (dogfooding)
+npm test               # vitest
+```
+
+`npm install` auto-installs the git hooks via the `prepare` script — Husky-style, so your commits to Wick get stamped like everyone else's without a manual step. It's skipped in CI and when Wick is a dependency, opt-out with `WICK_AUTOINSTALL=0`, and it never fails your install; `npx wick install` is the manual fallback. Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/); releases are cut automatically by release-please.
 
 ## Roadmap
 
