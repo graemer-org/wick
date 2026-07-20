@@ -49,15 +49,18 @@ jobs:
         run: |
           gh release upload "${{ needs.release-please.outputs.tag_name }}" wickhq-wick-*.tgz --clobber
 
-  # Publish @wickhq/wick to npm. Skips gracefully until the NPM_TOKEN secret
-  # exists, so releases keep working before the npm org/token is set up.
+  # Publish @wickhq/wick via npm trusted publishing (OIDC) — no token secret.
+  # Prereqs (one-time, manual): first publish from a maintainer machine, then
+  # configure the trusted publisher on npmjs.com (package Settings → Trusted
+  # Publisher: GitHub Actions, graemer-org/wick, workflow release.yml).
+  # Until the package exists on npm this job skips gracefully.
   publish-npm:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # npm --provenance
+      id-token: write # OIDC exchange for trusted publishing + provenance
     steps:
       - uses: actions/checkout@v7
         with:
@@ -66,14 +69,16 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
-      - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Trusted publishing needs npm >= 11.5.1; node 20 bundles npm 10.
+      - name: Update npm
+        run: npm install -g npm@latest
+      - name: Publish to npm (trusted publishing)
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "NPM_TOKEN secret not configured — skipping npm publish"
+          PKG="$(node -p 'require("./package.json").name')"
+          if ! npm view "$PKG" version >/dev/null 2>&1; then
+            echo "$PKG does not exist on npm yet — first publish is manual (see comment above); skipping"
             exit 0
           fi
           npm ci
           npm run build
-          npm publish --provenance --access public
+          npm publish

@@ -17,8 +17,7 @@
   "files": [
     "dist",
     "pricing.json",
-    "action.yml",
-    "scripts"
+    "scripts/prepare.mjs"
   ],
   "engines": {
     "node": ">=20"
