@@ -200,6 +200,28 @@ export function costFlavor(c: number | null): string | null {
   return "somebody's GPU bill 🔥";
 }
 
+/** shields.io endpoint schema: https://shields.io/badges/endpoint-badge */
+export interface Badge {
+  schemaVersion: 1;
+  label: string;
+  message: string;
+  color: string;
+}
+
+/**
+ * Shields.io endpoint JSON for a report — powers the repo's cost badge.
+ * Color heats up with spend; unknown cost renders grey "n/a".
+ */
+export function buildBadge(report: Report, label = "🕯️ wick"): Badge {
+  const c = report.totals.costUsd;
+  if (c === null) {
+    return { schemaVersion: 1, label, message: "n/a", color: "lightgrey" };
+  }
+  const color =
+    c < 10 ? "brightgreen" : c < 100 ? "green" : c < 500 ? "yellow" : c < 2000 ? "orange" : "red";
+  return { schemaVersion: 1, label, message: `$${c.toFixed(2)} burned`, color };
+}
+
 export interface RenderOptions {
   /** Emit ANSI colors. Default false — the CLI enables it on a TTY. */
   color?: boolean;
