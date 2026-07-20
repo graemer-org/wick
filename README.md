@@ -122,6 +122,26 @@ wick reconcile --onto <sha> <range>
                     (manual squash merge, cherry-pick, reset)
 ```
 
+## Budgets
+
+Give PRs a price tag *before* they're expensive. Commit a `.wick/config.json`:
+
+```json
+{
+  "budget": {
+    "pr": 15,
+    "warnAt": 0.8,
+    "enforce": false
+  }
+}
+```
+
+`pr` is the budget in USD per PR (or branch). `warnAt` is the fraction at which warnings start (default 0.8). `enforce: true` makes the Action's budget check fail an over-budget PR.
+
+`wick report` then shows a budget bar for any branch-scoped range, the PR comment carries the spend vs. budget, and with `enforce: true` the Action fails its check when a PR blows the budget (the comment is always posted first, so you can see *why*). When a model has no pricing, the budget is reported as unknown and never enforced — Wick doesn't fail builds on guesses. Full-history reports on the default branch skip the budget; it's a per-PR number.
+
+This repo dogfoods a **$15 warn-only budget** — look at any PR comment here.
+
 ## Pricing
 
 Costs are computed from a bundled pricing table (USD per 1M tokens, split by input / cache read / cache write / output, per model). Override it by dropping a `.wick/pricing.json` into your repo — useful for negotiated rates or new models. Unknown models show raw tokens and `n/a` instead of a guessed number.
@@ -153,7 +173,6 @@ npm test               # vitest
 
 - GitHub Copilot provider (the adapter interface already exists)
 - Org-level aggregation across repos and teams
-- Cost budgets and thresholds per PR
 
 ## License
 

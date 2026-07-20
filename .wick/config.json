@@ -1,0 +1,7 @@
+{
+  "budget": {
+    "pr": 15,
+    "warnAt": 0.8,
+    "enforce": false
+  }
+}

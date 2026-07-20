@@ -41,6 +41,25 @@ const sumTok = (t) => t.input + t.cacheRead + t.cacheWrite + t.output;
 const t = report.totals;
 const cost = fmtCost(t.costUsd);
 
+const budgetLines = (() => {
+  const b = report.budget;
+  if (!b) return [];
+  if (b.status === "unknown") {
+    return [`🎯 **budget ${fmtCost(b.limitUsd)}** — spend unknown (no pricing)`, ""];
+  }
+  const frac = b.usedFraction ?? 0;
+  const cell = b.status === "over" ? "🟥" : b.status === "warn" ? "🟨" : "🟩";
+  const filled = Math.min(10, Math.max(frac > 0 ? 1 : 0, Math.round(frac * 10)));
+  const bar = cell.repeat(filled) + "⬜".repeat(10 - filled);
+  const tail =
+    b.status === "over"
+      ? `**over by ${fmtCost(b.usedUsd - b.limitUsd)}**${b.enforce ? " — ❌ budget check fails" : ""}`
+      : b.status === "warn"
+        ? `${Math.round(frac * 100)}% — approaching budget`
+        : `${Math.round(frac * 100)}%`;
+  return [`🎯 **budget:** ${fmtCost(b.usedUsd)} / ${fmtCost(b.limitUsd)} ${bar} ${tail}`, ""];
+})();
+
 const authorLines =
   (report.authors?.length ?? 0) > 1
     ? [
@@ -87,6 +106,7 @@ const body = [
   "|---:|---:|---:|---:|",
   `| ${fmtTokens(t.tokens.input)} | ${fmtTokens(t.tokens.cacheRead)} | ${fmtTokens(t.tokens.cacheWrite)} | ${fmtTokens(t.tokens.output)} |`,
   "",
+  ...budgetLines,
   ...authorLines,
   ...detailsBlock,
   ...(flavor ? [`> ≈ ${flavor}`] : []),
