@@ -115,13 +115,39 @@ export function syncNotesToRemote(
   return forced ? "merged-and-pushed" : "failed";
 }
 
-/** Copy/merge the note from oldCommit onto newCommit (post-rewrite remapping). */
-export function remapNote(oldCommit: string, newCommit: string, cwd: string): void {
-  const oldNote = readNote(oldCommit, cwd);
-  if (!oldNote) return;
-  const newNote = readNote(newCommit, cwd);
-  // If git's own notes.rewriteRef copying already moved the identical note,
-  // merging would double it — only merge when the new note differs.
-  if (newNote && JSON.stringify(newNote) === JSON.stringify(oldNote)) return;
-  writeNote(newCommit, newNote ? mergeNotes(newNote, oldNote) : oldNote, cwd);
+/**
+ * Copy/merge notes from all old commits that were rewritten into one new
+ * commit (post-rewrite remapping). Fixup/squash rebases map MANY old commits
+ * to ONE new commit, and git's own notes.rewriteRef copying has already run
+ * by the time the hook fires — so the pairs must be handled as a group
+ * against a single up-front read of the target, not one at a time:
+ * pair-at-a-time merging against a mutating target can't tell "note git
+ * copied from source F" apart from "F already merged" and double-counts F
+ * when notes.rewriteMode=overwrite.
+ */
+export function remapNotes(oldCommits: string[], newCommit: string, cwd: string): void {
+  const oldNotes = oldCommits
+    .map((c) => readNote(c, cwd))
+    .filter((n): n is NoteData => n !== null);
+  if (oldNotes.length === 0) return;
+
+  // A pre-existing target note identical to any source is git's own
+  // rewriteRef copy (rewriteMode=overwrite copies one source verbatim;
+  // the default concatenate produces malformed JSON that readNote already
+  // treats as absent) — drop it, the merge re-adds that stamp exactly once.
+  // A fresh post-commit stamp from an amend differs from every source and
+  // is kept as the merge base.
+  let base = readNote(newCommit, cwd);
+  if (base !== null) {
+    const b = JSON.stringify(base);
+    if (oldNotes.some((o) => JSON.stringify(o) === b)) base = null;
+  }
+
+  const merged = oldNotes.reduce(
+    (acc, o) => mergeNotes(acc, o),
+    base ?? { v: 1 as const, sessions: [] },
+  );
+  const current = readNote(newCommit, cwd);
+  if (current && JSON.stringify(current) === JSON.stringify(merged)) return;
+  writeNote(newCommit, merged, cwd);
 }

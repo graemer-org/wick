@@ -1,6 +1,6 @@
 import { collectUsage } from "../providers/types.js";
 import { computeDelta } from "../attribution.js";
-import { remapNote, syncNotesToRemote, upsertNote } from "../notes.js";
+import { remapNotes, syncNotesToRemote, upsertNote } from "../notes.js";
 import { loadState, saveState, withLock } from "../state.js";
 import { repoRoot, tryGit } from "../git.js";
 
@@ -33,14 +33,20 @@ export async function postCommit(cwd: string, commit?: string): Promise<void> {
 /**
  * Remap notes across a history rewrite (amend/rebase).
  * `pairs` are lines of "<old-sha> <new-sha>" as delivered on stdin.
+ * Fixup/squash rebases map many old commits to one new commit, so pairs are
+ * grouped by new commit and remapped together (see remapNotes for why).
  */
 export async function postRewrite(cwd: string, pairs: string): Promise<void> {
   const root = repoRoot(cwd);
+  const byNew = new Map<string, string[]>();
   for (const line of pairs.split("\n")) {
     const [oldSha, newSha] = line.trim().split(/\s+/);
     if (!oldSha || !newSha || oldSha === newSha) continue;
+    byNew.set(newSha, [...(byNew.get(newSha) ?? []), oldSha]);
+  }
+  for (const [newSha, oldShas] of byNew) {
     try {
-      remapNote(oldSha, newSha, root);
+      remapNotes(oldShas, newSha, root);
     } catch {
       // never fail the git operation
     }
