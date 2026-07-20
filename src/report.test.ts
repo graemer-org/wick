@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildBadge, type Report } from "./report.js";
+import { buildBadge, renderBadgeSvg, type Report } from "./report.js";
 
 function reportWithCost(costUsd: number | null): Report {
   return {
@@ -46,5 +46,21 @@ describe("buildBadge", () => {
 
   it("accepts a custom label", () => {
     expect(buildBadge(reportWithCost(1), "AI spend").label).toBe("AI spend");
+  });
+});
+
+describe("renderBadgeSvg", () => {
+  it("renders label, message, and mapped color", () => {
+    const svg = renderBadgeSvg(buildBadge(reportWithCost(23.41)));
+    expect(svg).toContain("<svg");
+    expect(svg).toContain("$23.41 burned");
+    expect(svg).toContain('fill="#97ca00"'); // green tier
+    expect(svg).toContain("🕯️ wick");
+  });
+
+  it("escapes XML in the label", () => {
+    const svg = renderBadgeSvg(buildBadge(reportWithCost(1), "<cost> & fire"));
+    expect(svg).toContain("&lt;cost&gt; &amp; fire");
+    expect(svg).not.toContain("<cost>");
   });
 });

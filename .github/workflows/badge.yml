@@ -35,8 +35,11 @@ jobs:
       - name: Fetch wick notes
         run: git fetch origin '+refs/notes/wick:refs/notes/wick' || echo "no wick notes on origin yet"
 
-      - name: Generate badge JSON
+      - name: Generate badge
         run: |
+          # SVG for the README (served authenticated, so it works on private
+          # repos); endpoint JSON alongside for shields.io on public repos.
+          node dist/cli.js badge --svg HEAD > /tmp/wick-badge.svg
           node dist/cli.js badge HEAD > /tmp/wick-badge.json
           cat /tmp/wick-badge.json
 
@@ -46,7 +49,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --orphan wick-badge
           git rm -rf --quiet .
+          cp /tmp/wick-badge.svg wick-badge.svg
           cp /tmp/wick-badge.json wick-badge.json
-          git add wick-badge.json
+          git add wick-badge.svg wick-badge.json
           git commit -m "chore: update wick cost badge"
           git push --force origin wick-badge

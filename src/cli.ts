@@ -5,7 +5,7 @@ import { registerProvider, getProviders } from "./providers/types.js";
 import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { install, uninstall, hasWickBlock, HOOK_EVENTS } from "./install.js";
 import { postCommit, postMerge, postRewrite } from "./hooks/index.js";
-import { buildBadge, buildReport, renderReport } from "./report.js";
+import { buildBadge, buildReport, renderBadgeSvg, renderReport } from "./report.js";
 import { repoRoot, tryGit } from "./git.js";
 import { loadState } from "./state.js";
 import { NOTES_REF } from "./notes.js";
@@ -107,9 +107,11 @@ program
   )
   .argument("[range]", "git revision range, e.g. HEAD or main..HEAD")
   .option("--label <label>", "badge label", "🕯️ wick")
-  .action((range: string | undefined, opts: { label: string }) => {
+  .option("--svg", "emit a self-hosted SVG instead of endpoint JSON (works on private repos)")
+  .action((range: string | undefined, opts: { label: string; svg?: boolean }) => {
     const report = buildReport(process.cwd(), range);
-    console.log(JSON.stringify(buildBadge(report, opts.label)));
+    const badge = buildBadge(report, opts.label);
+    console.log(opts.svg ? renderBadgeSvg(badge) : JSON.stringify(badge));
   });
 
 program

@@ -1,6 +1,6 @@
 # 🕯️ Wick
 
-[![wick cost](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgraemer-org%2Fwick%2Fwick-badge%2Fwick-badge.json)](https://github.com/graemer-org/wick/blob/main/README.md#cost-badge)
+[![wick cost](https://github.com/graemer-org/wick/raw/wick-badge/wick-badge.svg)](https://github.com/graemer-org/wick/blob/main/README.md#cost-badge)
 
 **Know what your code costs.** Wick measures AI token spend per commit and rolls it up per Pull Request — so every PR answers the question nobody can answer today: *what did this actually cost to build?*
 
@@ -87,16 +87,21 @@ Every PR gets one comment with the total cost (and a per-author split when sever
 
 ## Cost badge
 
-The badge at the top of this README is the live, all-time cost of building Wick. `wick badge` prints [shields.io endpoint JSON](https://shields.io/badges/endpoint-badge) for any commit range:
+The badge at the top of this README is the live, all-time cost of building Wick. `wick badge` renders it for any commit range:
 
 ```bash
-wick badge            # cost of the whole default branch
+wick badge            # shields.io endpoint JSON for the whole default branch
 # {"schemaVersion":1,"label":"🕯️ wick","message":"$23.41 burned","color":"brightgreen"}
+wick badge --svg      # self-hosted SVG — no shields.io, works on private repos
 ```
 
-To get one for your repo, publish that JSON somewhere shields.io can reach — this repo's [badge workflow](.github/workflows/badge.yml) regenerates it on every push to `main` (and after merge reconciliation) and force-pushes it to an orphan `wick-badge` branch. Then embed:
+This repo's [badge workflow](.github/workflows/badge.yml) regenerates both on every push to `main` (and after merge reconciliation) and force-pushes them to an orphan `wick-badge` branch. Embed whichever fits your repo:
 
 ```markdown
+<!-- private or public — GitHub serves same-repo images authenticated -->
+![wick cost](https://github.com/<owner>/<repo>/raw/wick-badge/wick-badge.svg)
+
+<!-- public repos can go through shields.io instead -->
 ![wick cost](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2F<owner>%2F<repo>%2Fwick-badge%2Fwick-badge.json)
 ```
 
