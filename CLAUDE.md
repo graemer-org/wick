@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Wick is a TypeScript CLI (ESM, Node ≥ 20, `commander` as the only runtime dep) that stamps Claude Code token deltas onto git commits as notes under `refs/notes/wick` and aggregates them into per-PR cost reports, a sticky PR comment (GitHub Action), and a cost badge.
+Wick is a TypeScript CLI (ESM, Node ≥ 22.12, `commander` as the only runtime dep) that stamps Claude Code token deltas onto git commits as notes under `refs/notes/wick` and aggregates them into per-PR cost reports, a sticky PR comment (GitHub Action), and a cost badge.
 
 ## Commands
 
