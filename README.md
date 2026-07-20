@@ -130,15 +130,14 @@ Give PRs a price tag *before* they're expensive. Commit a `.wick/config.json`:
 {
   "budget": {
     "pr": 15,
-    "warnAt": 0.8,
-    "enforce": false
+    "warnAt": 0.8
   }
 }
 ```
 
-`pr` is the budget in USD per PR (or branch). `warnAt` is the fraction at which warnings start (default 0.8). `enforce: true` makes the Action's budget check fail an over-budget PR.
+`pr` is the budget in USD per PR (or branch). `warnAt` is the fraction at which warnings start (default 0.8).
 
-`wick report` then shows a budget bar for any branch-scoped range, the PR comment carries the spend vs. budget, and with `enforce: true` the Action fails its check when a PR blows the budget (the comment is always posted first, so you can see *why*). When a model has no pricing, the budget is reported as unknown and never enforced — Wick doesn't fail builds on guesses. Full-history reports on the default branch skip the budget; it's a per-PR number.
+`wick report` then shows a budget bar for any branch-scoped range, the PR comment carries the spend vs. budget, and an over-budget PR gets a workflow warning annotation in CI. Budgets deliberately **never fail a check**: the money is already spent, and a PR's cost only ever grows — a failing budget check would leave you able to keep committing but never able to merge. Wick makes the overspend loud and visible; what to do about it is a conversation, not a blocked button. Full-history reports on the default branch skip the budget; it's a per-PR number.
 
 This repo dogfoods a **$15 warn-only budget** — look at any PR comment here.
 
