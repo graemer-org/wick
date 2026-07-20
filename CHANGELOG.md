@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/graemer-org/wick/compare/v0.3.0...v0.4.0) (2026-07-20)
+
+
+### Features
+
+* per-PR cost budgets with warn and enforce thresholds ([#17](https://github.com/graemer-org/wick/issues/17)) ([44e38fe](https://github.com/graemer-org/wick/commit/44e38fe13583bdb947e2d032557522caf9624909))
+
+
+### Bug Fixes
+
+* budgets warn, never block — remove the enforce option ([#18](https://github.com/graemer-org/wick/issues/18)) ([13f70bc](https://github.com/graemer-org/wick/commit/13f70bc99b9d751885e70f88ee5621c943af2b2b))
+* merge diverged notes refs in the pre-push hook ([#14](https://github.com/graemer-org/wick/issues/14)) ([54d188a](https://github.com/graemer-org/wick/commit/54d188af29fa2d7d3e7b60fd3e7273a1577f7370))
+
 ## [0.3.0](https://github.com/graemer-org/wick/compare/v0.2.0...v0.3.0) (2026-07-20)
 
 
