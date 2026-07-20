@@ -1,6 +1,9 @@
 {
-  "name": "wick",
+  "name": "@wickhq/wick",
   "version": "0.4.1",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Measure AI token costs per git commit and aggregate them per Pull Request",
   "author": "Patrick Grämer <5955669+pgraemer@users.noreply.github.com>",
   "repository": {
