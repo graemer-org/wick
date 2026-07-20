@@ -7,6 +7,9 @@ Wick is a TypeScript CLI (ESM, Node ≥ 22.12, `commander` as the only runtime d
 ```bash
 npm run build            # tsc → dist/
 npm test                 # vitest run (unit + integration; integration tests create throwaway git repos)
+# Tests build fixtures through `TestFactory` in src/test-factory.ts (test-only:
+# excluded from tsc in tsconfig, never ships in the npm package). Follow AAA
+# (Arrange/Act/Assert) and use descriptive variable names in new tests.
 npm run test:watch
 node dist/cli.js <cmd>   # run the CLI (build first); `wick --version` reads package.json at runtime
 ```
