@@ -15,7 +15,7 @@ node dist/cli.js <cmd>   # run the CLI (build first); `wick --version` reads pac
 
 Data flow: provider transcripts → attribution delta → git note per commit → report / action / badge.
 
-- `src/providers/` — `UsageProvider` adapters. `claude-code/` discovers JSONL transcripts under `~/.claude/projects/<url-encoded-project-path>/`, dedupes streamed message snapshots by `message.id` (keep the **last** occurrence). Subagent usage lives in `<project-dir>/<session-id>/subagents/*.jsonl` and belongs to the parent session.
+- `src/providers/` — `UsageProvider` adapters. `claude-code/` discovers JSONL transcripts under `~/.claude/projects/<url-encoded-project-path>/`, dedupes streamed message snapshots by `message.id` (keep the **last** occurrence). Subagent usage lives in `<project-dir>/<session-id>/subagents/*.jsonl` and belongs to the parent session. `copilot-cli/` reads `~/.copilot/session-state/<uuid>/events.jsonl` (repo match via `session.start` `context.gitRoot`; full usage in `session.shutdown` `modelMetrics`) and, for live sessions, the central `~/.copilot/session-store.db` via the `sqlite3` CLI. **Copilot's `inputTokens` INCLUDES `cacheReadTokens`** (both surfaces, verified against the per-request price ledger) — wick subtracts; forgetting inflates cost ~10x.
 - `src/attribution.ts` — session→commit token-delta logic (the hard part; see invariants).
 - `src/notes.ts` — read/write/merge git notes under `refs/notes/wick`.
 - `src/state.ts` — local bookkeeping in `.git/wick/` (`state.json` cumulative baselines + mkdir-based lock). Never committed.

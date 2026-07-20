@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { registerProvider, getProviders } from "./providers/types.js";
 import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
+import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { install, uninstall, hasWickBlock, HOOK_EVENTS } from "./install.js";
 import { postCommit, postMerge, postRewrite, prePush } from "./hooks/index.js";
 import { buildBadge, buildReport, renderBadgeSvg, renderReport } from "./report.js";
@@ -11,6 +12,7 @@ import { loadState } from "./state.js";
 import { NOTES_REF } from "./notes.js";
 
 registerProvider(createClaudeCodeProvider());
+registerProvider(createCopilotCliProvider());
 
 // dist/cli.js -> ../package.json (package root); keeps --version in sync
 // with release-please bumps.

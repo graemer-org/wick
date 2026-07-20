@@ -18,13 +18,13 @@ Like a wick, your tokens burn down. Wick shows you where.
 
 AI agents write more and more of our code. Every session burns tokens, but the costs vanish into a monthly bill with zero attribution. Wick attaches spend to the thing you actually ship: the commit, the branch, the PR. Developers see the price of their workflow in real time; teams see where the money goes.
 
-Wick currently supports **Claude Code**. The core is provider-agnostic — more providers are on the roadmap.
+Wick currently supports **Claude Code** and **GitHub Copilot CLI**. The core is provider-agnostic — more providers are on the roadmap.
 
 ## How it works
 
 No server, no telemetry, no account. Everything lives in git and on your machine.
 
-1. **Read** — Claude Code writes a local JSONL transcript for every session, including token usage per message. Wick parses these; your prompts and code never leave your disk.
+1. **Read** — your AI tools already write local session logs with real token usage: Claude Code's JSONL transcripts, and Copilot CLI's session state (`~/.copilot`, including the exact per-request rates GitHub bills). Wick parses these; your prompts and code never leave your disk.
 2. **Stamp** — git hooks (installed by Wick itself, no Husky required) attach the session's token delta to each commit as a [git note](https://git-scm.com/docs/git-notes) under `refs/notes/wick`. Rebases and amends are handled — stamps follow rewritten commits.
 3. **Report** — `wick report` sums the notes for any commit range, with a per-commit table and a breakdown by commit author. The GitHub Action does the same for a PR and posts a sticky cost comment.
 
@@ -150,6 +150,7 @@ Costs are computed from a bundled pricing table (USD per 1M tokens, split by inp
 Wick reads what Claude Code writes to disk and dedupes streamed message snapshots by message ID, so totals match what the API actually billed — not inflated log sums. A few honest limitations in the current version:
 
 - Sessions from another machine aren't captured (stamps carry stable session IDs, so reconciliation is possible later).
+- A still-running Copilot CLI session reports exact usage when the central session store has per-request rows (current CLI versions); on older versions only output tokens are visible until the session ends, so mid-session stamps are a lower bound that completes on the next commit after shutdown.
 - `commit --amend` and `rebase` are fully handled by hooks. **Squash and rebase merges on GitHub** are reconciled automatically by the Action (`mode: reconcile`, triggered when a PR is merged) — the stamps are remapped onto the new commits on the base branch. For manual cases (`git merge --squash`, `cherry-pick`, `reset`), `wick reconcile --onto <new-sha> <old-range>` copies the stamps over, idempotently.
 - Wick never blocks or fails a git operation. If anything goes wrong, your commit goes through and Wick logs a warning.
 - The by-author breakdown groups by git author and respects [`.mailmap`](https://git-scm.com/docs/gitmailmap) — useful because GitHub squash commits carry your account's primary email while local commits may use the noreply address. One line in `.mailmap` merges them.
