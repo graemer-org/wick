@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/graemer-org/wick/compare/v0.4.1...v0.5.0) (2026-07-20)
+
+
+### Features
+
+* publish as @wickhq/wick ([#21](https://github.com/graemer-org/wick/issues/21)) ([f0841cd](https://github.com/graemer-org/wick/commit/f0841cd629d86264896c0f2fecac0e181d39c827))
+
 ## [0.4.1](https://github.com/graemer-org/wick/compare/v0.4.0...v0.4.1) (2026-07-20)
 
 
