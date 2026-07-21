@@ -118,11 +118,15 @@ runs:
           # the token/cost formatting) rather than re-deriving it here.
           COST_LINE=$($WICK cost)
           echo "$COST_LINE"
-          if [ -n "$COMMENT_ISSUE" ]; then
+          if [ -z "$COMMENT_ISSUE" ]; then
+            echo "no comment-issue provided — cost logged only"
+          elif [[ "$COST_LINE" == *"across 0 sessions"* ]]; then
+            # A genuinely no-op run (agent skipped, transcript not flushed) has
+            # no cost worth a comment — logging it above is enough.
+            echo "no sessions found — skipping comment"
+          else
             gh issue comment "$COMMENT_ISSUE" --repo "$REPO" \
               --body "🤖 ${COST_LINE} — no commit produced."
-          else
-            echo "no comment-issue provided — cost logged only"
           fi
           exit 0
         fi
