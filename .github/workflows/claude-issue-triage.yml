@@ -1,0 +1,71 @@
+name: Claude Issue Triage
+
+# Triage every newly opened issue: categorize + label it, verify the report
+# against the codebase, and post a concrete implementation/investigation plan
+# as a comment. Read-only on the repo; only writes to the issue.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+# Serialize triage per issue so a burst of edits/reopens can't stack runs.
+concurrency:
+  group: claude-issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Triage the issue with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Issues can be filed by users without write access.
+          allowed_non_write_users: "*"
+          prompt: |
+            You are triaging a newly opened issue in ${{ github.repository }}.
+            ISSUE_NUMBER: ${{ github.event.issue.number }}
+
+            Wick is a TypeScript ESM CLI that stamps AI token cost deltas onto git
+            commits as notes and aggregates them per PR. Read CLAUDE.md first for
+            architecture and the hard invariants.
+
+            Do these three steps, then post ONE issue comment with the result:
+
+            1. TRIAGE — Categorize the issue (bug / feature / question / docs /
+               invalid). Apply appropriate labels with `gh issue edit`; create a
+               label first with `gh label create` if it does not already exist. Use
+               `gh label list` to see what exists. Keep labels minimal and honest.
+
+            2. VERIFY — Investigate the codebase by reading it (Read/Grep/Glob) to
+               confirm the report. For a bug: locate the relevant code and judge from
+               it whether the issue is valid, already fixed, expected behavior, or
+               needs more info — cite files as `path:line`. Do NOT build or execute
+               the project: this job runs on issues from untrusted reporters, so it
+               has no code-execution tools by design. For a feature: assess
+               feasibility and how it fits the existing architecture and invariants.
+
+            3. PLAN — Write a concrete, file-referenced plan (the specific files and
+               functions to change, invariants to respect, tests to add). If the
+               issue is invalid or needs info, say what's missing instead.
+
+            Post the comment with `gh issue comment`. Be concise and specific; do not
+            edit code or open a PR — this is triage only.
+          # No Bash code-execution (npm/node/git) here: issues come from untrusted
+          # reporters, so keep triage to read-only analysis plus the gh issue/label
+          # commands needed to label and comment.
+          claude_args: |
+            --model claude-sonnet-5
+            --max-turns 25
+            --allowedTools "Bash(gh issue:*),Bash(gh label:*),Read,Grep,Glob"
