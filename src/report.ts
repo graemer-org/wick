@@ -274,14 +274,22 @@ export function buildReport(cwd: string, rangeArg?: string): Report {
   return report;
 }
 
-function fmtTokens(n: number): string {
+export function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 }
 
-function fmtCost(c: number | null): string {
+export function fmtCost(c: number | null): string {
   return c === null ? "n/a" : `$${c.toFixed(2)}`;
+}
+
+/** One-line human summary for `wick cost` — reuses the report's formatters. */
+export function renderCostLine(summary: CostSummary): string {
+  return (
+    `wick: ${fmtTokens(summary.totalTokens)} tokens ≈ ${fmtCost(summary.costUsd)} ` +
+    `across ${summary.sessions} session${summary.sessions === 1 ? "" : "s"}`
+  );
 }
 
 /** A deterministic, gently silly comparison for a dollar amount. */

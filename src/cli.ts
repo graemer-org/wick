@@ -6,7 +6,14 @@ import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { install, uninstall, hasWickBlock, HOOK_EVENTS } from "./install.js";
 import { postCommit, postMerge, postRewrite, prePush } from "./hooks/index.js";
-import { buildBadge, buildReport, renderBadgeSvg, renderReport, summarizeCost } from "./report.js";
+import {
+  buildBadge,
+  buildReport,
+  renderBadgeSvg,
+  renderCostLine,
+  renderReport,
+  summarizeCost,
+} from "./report.js";
 import { loadPricing } from "./pricing.js";
 import { notesRemote, repoRoot, tryGit } from "./git.js";
 import { loadState } from "./state.js";
@@ -150,18 +157,7 @@ program
       console.log(JSON.stringify(summary, null, 2));
       return;
     }
-    const cost = summary.costUsd === null ? "n/a" : `$${summary.costUsd.toFixed(2)}`;
-    const tokens =
-      summary.totalTokens >= 1_000_000
-        ? `${(summary.totalTokens / 1_000_000).toFixed(1)}M`
-        : summary.totalTokens >= 1_000
-          ? `${(summary.totalTokens / 1_000).toFixed(1)}k`
-          : String(summary.totalTokens);
-    console.log(
-      `wick: ${tokens} tokens ≈ ${cost} across ${summary.sessions} session${
-        summary.sessions === 1 ? "" : "s"
-      }`,
-    );
+    console.log(renderCostLine(summary));
     if (summary.unknownModels.length > 0) {
       console.error(
         `wick: no pricing for ${summary.unknownModels.join(", ")} — cost shown is a lower bound`,

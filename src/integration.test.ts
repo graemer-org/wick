@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import * as path from "node:path";
@@ -7,7 +7,7 @@ import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { postCommit, postRewrite, prePush } from "./hooks/index.js";
 import { readNote, syncNotesFromRemote, writeNote } from "./notes.js";
-import { buildReport, summarizeCost } from "./report.js";
+import { buildReport, renderCostLine, summarizeCost } from "./report.js";
 import { clearProviders, collectUsage, registerProvider, type SessionUsage } from "./providers/types.js";
 import type { PricingTable } from "./pricing.js";
 import { TestFactory } from "./test-factory.js";
@@ -559,16 +559,13 @@ describe("syncNotesFromRemote (auto-fetch on report)", () => {
 
 describe("CI capture (issue #33) — stamp + push with hooks never installed", () => {
   beforeEach(() => clearProviders());
-  afterEach(() => {
-    clearProviders();
-    vi.unstubAllEnvs();
-  });
+  afterEach(() => clearProviders());
 
-  it("stamps a commit in a CI-shaped checkout that never installed hooks", async () => {
-    // Arrange — mimic CI: CI=1 (prepare.mjs would skip hook install), a fresh
-    // repo with no wick hooks, and a session that burned tokens during the run.
-    vi.stubEnv("CI", "1");
+  it("stamps a commit directly (no installed hook), as the CI stamp step does", async () => {
+    // Arrange — a fresh repo where `wick install` was never run (prepare.mjs
+    // skips hook install under CI) and a session that burned tokens.
     const repoPath = TestFactory.makeRepo();
+    expect(existsSync(path.join(repoPath, ".git", "hooks", "post-commit"))).toBe(false);
     registerProvider(TestFactory.makeMockProvider("mock-provider", { output: 500 }));
     const ciCommit = TestFactory.makeCommit(repoPath, "agent change made in CI");
 
@@ -616,5 +613,43 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     expect(summary.sessions).toBe(1);
     expect(readNote(head, repoPath)).toBeNull();
     expect(existsSync(path.join(repoPath, ".git", "wick", "state.json"))).toBe(false);
+  });
+
+  it("prices the known model and skips the unknown one (never guess a price)", () => {
+    // Arrange — one session touching a priced model and an unpriced one.
+    const usage: SessionUsage[] = [
+      TestFactory.makeSessionUsage("s-known", "priced-model", { output: 1_000_000 }),
+      TestFactory.makeSessionUsage("s-unknown", "mystery-model", { output: 2_000_000 }),
+    ];
+    const pricing: PricingTable = {
+      "claude-code": [{ match: "priced-model", input: 0, cacheRead: 0, cacheWrite: 0, output: 4 }],
+    };
+
+    // Act
+    const summary = summarizeCost(usage, pricing);
+
+    // Assert — cost is the known model's cost (a lower bound), NOT null, and the
+    // unknown model is surfaced separately. This is the subtler half of the
+    // "unknown model → cost n/a, never guess" invariant.
+    expect(summary.costUsd).toBeCloseTo(4); // 1M × $4/1M from the priced model only
+    expect(summary.unknownModels).toEqual(["claude-code/mystery-model"]);
+    expect(summary.totalTokens).toBe(3_000_000);
+  });
+
+  it("renderCostLine formats tokens, cost and session plurality", () => {
+    // Arrange — three summaries covering k/M suffixes, n/a cost, and plurality.
+    const priced = summarizeCost(
+      [TestFactory.makeSessionUsage("s1", "m", { output: 82_400 })],
+      { "claude-code": [{ match: "m", input: 0, cacheRead: 0, cacheWrite: 0, output: 5 }] },
+    );
+    const unknown = summarizeCost(
+      [TestFactory.makeSessionUsage("s1", "m", { output: 2_000_000 })],
+      {},
+    );
+
+    // Act + Assert
+    expect(renderCostLine(priced)).toBe("wick: 82.4k tokens ≈ $0.41 across 1 session");
+    expect(renderCostLine(unknown)).toBe("wick: 2.0M tokens ≈ n/a across 1 session");
+    expect(renderCostLine(summarizeCost([], {}))).toBe("wick: 0 tokens ≈ $0.00 across 0 sessions");
   });
 });

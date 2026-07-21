@@ -1,5 +1,5 @@
 name: "Wick PR cost report"
-description: "Posts the AI token cost of a Pull Request as a sticky PR comment, computed from wick git notes."
+description: "Wick AI cost in CI: post a PR's sticky cost comment (report), remap stamps after a squash/rebase merge (reconcile), or capture an agent run's cost (stamp)."
 inputs:
   github-token:
     description: "Token used to post the PR comment"
@@ -10,7 +10,7 @@ inputs:
     required: false
     default: "report"
   base-sha:
-    description: "'stamp' mode: HEAD before the agent ran; when HEAD is unchanged the run made no commit and the cost is reported as a comment instead of stamped"
+    description: "'stamp' mode: HEAD before the agent ran. Required for stamp — it's how the run tells a fresh commit (stamp it) from a question-only run (comment the cost). Omitting it skips capture entirely (a blind stamp could double-count on re-runs)."
     required: false
     default: ""
   comment-issue:
@@ -85,6 +85,9 @@ runs:
     - name: Stamp AI cost (or comment when no commit)
       if: ${{ inputs.mode == 'stamp' }}
       shell: bash
+      # Best-effort telemetry: a transient gh/cost hiccup must not redden the
+      # whole run (the stamp/push path itself already exits 0 by design).
+      continue-on-error: true
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         BASE_SHA: ${{ inputs.base-sha }}
@@ -93,12 +96,21 @@ runs:
       run: |
         set -euo pipefail
         WICK="node ${{ github.action_path }}/dist/cli.js"
+
+        # base-sha is how we tell a fresh commit from a question-only run.
+        # Without it we can't decide, and a blind stamp would double-count the
+        # same tokens onto HEAD on a re-run — so skip rather than guess.
+        if [ -z "$BASE_SHA" ]; then
+          echo "wick: stamp mode needs base-sha to detect whether the run committed — skipping capture"
+          exit 0
+        fi
+
         # git notes needs a committer identity; runners have none.
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
         HEAD_SHA=$(git rev-parse HEAD)
 
-        if [ -n "$BASE_SHA" ] && [ "$HEAD_SHA" = "$BASE_SHA" ]; then
+        if [ "$HEAD_SHA" = "$BASE_SHA" ]; then
           # No commit this run — there is nothing to anchor a stamp to, and
           # stamping the pre-existing HEAD would pollute a commit already
           # reported in its own PR range. Surface the run's cost as a comment.
