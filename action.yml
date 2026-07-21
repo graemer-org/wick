@@ -110,10 +110,11 @@ runs:
           echo "$COST_LINE"
           if [ -z "$COMMENT_ISSUE" ]; then
             echo "no comment-issue provided — cost logged only"
-          elif [[ "$COST_LINE" == *"across 0 sessions"* ]]; then
-            # A genuinely no-op run (agent skipped, transcript not flushed) has
-            # no cost worth a comment — logging it above is enough.
-            echo "no sessions found — skipping comment"
+          elif [[ "$COST_LINE" == "wick: 0 tokens "* ]]; then
+            # Nothing worth a comment: 0 tokens — the agent was skipped, errored
+            # immediately, or its transcript wasn't flushed (covers the 0-session
+            # case too). Logging the line above is enough.
+            echo "no usage found — skipping comment"
           else
             gh issue comment "$COMMENT_ISSUE" --repo "$REPO" \
               --body "🤖 ${COST_LINE} — no commit produced."

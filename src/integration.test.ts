@@ -683,4 +683,20 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     expect(renderCostLine(unknown)).toBe("wick: 2.0M tokens ≈ n/a across 1 session");
     expect(renderCostLine(summarizeCost([], {}))).toBe("wick: 0 tokens ≈ $0.00 across 0 sessions");
   });
+
+  it("renders a 'wick: 0 tokens ' prefix whenever there is no usage (action skip guard)", () => {
+    // Arrange — the exact degenerate shape a run that errored immediately leaves:
+    // a discovered session with 0 tokens (and here an unpriced model).
+    const zeroTokenSession = summarizeCost(
+      [TestFactory.makeSessionUsage("s1", "mystery", { output: 0 })],
+      {},
+    );
+    const noSessions = summarizeCost([], {});
+
+    // Act + Assert — action.yml's comment-skip guard keys off this "wick: 0 tokens "
+    // prefix, so both the 0-session and 0-token-but-1-session cases must carry it.
+    expect(renderCostLine(zeroTokenSession).startsWith("wick: 0 tokens ")).toBe(true);
+    expect(renderCostLine(zeroTokenSession)).toBe("wick: 0 tokens ≈ n/a across 1 session");
+    expect(renderCostLine(noSessions).startsWith("wick: 0 tokens ")).toBe(true);
+  });
 });
