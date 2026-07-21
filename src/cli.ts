@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
-import { registerProvider, getProviders } from "./providers/types.js";
+import { registerProvider, getProviders, collectUsage } from "./providers/types.js";
 import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { install, uninstall, hasWickBlock, HOOK_EVENTS } from "./install.js";
 import { postCommit, postMerge, postRewrite, prePush } from "./hooks/index.js";
-import { buildBadge, buildReport, renderBadgeSvg, renderReport } from "./report.js";
+import { buildBadge, buildReport, renderBadgeSvg, renderReport, summarizeCost } from "./report.js";
+import { loadPricing } from "./pricing.js";
 import { notesRemote, repoRoot, tryGit } from "./git.js";
 import { loadState } from "./state.js";
 import { NOTES_REF, syncNotesFromRemote } from "./notes.js";
@@ -130,6 +131,42 @@ program
     const report = buildReport(process.cwd(), range);
     const badge = buildBadge(report, opts.label);
     console.log(opts.svg ? renderBadgeSvg(badge) : JSON.stringify(badge));
+  });
+
+program
+  .command("cost")
+  .description(
+    "total token cost of the AI sessions touching this repo right now (no commit needed) — used by CI to report the cost of a run that produced no commit",
+  )
+  .option("--json", "machine-readable output")
+  .action(async (opts: { json?: boolean }) => {
+    const cwd = process.cwd();
+    const root = repoRoot(cwd);
+    // Read-only: collect current cumulative usage and price it. No delta, no
+    // note write, no state mutation — this must not disturb the stamp baselines.
+    const usage = await collectUsage(root, {});
+    const summary = summarizeCost(usage, loadPricing(root));
+    if (opts.json) {
+      console.log(JSON.stringify(summary, null, 2));
+      return;
+    }
+    const cost = summary.costUsd === null ? "n/a" : `$${summary.costUsd.toFixed(2)}`;
+    const tokens =
+      summary.totalTokens >= 1_000_000
+        ? `${(summary.totalTokens / 1_000_000).toFixed(1)}M`
+        : summary.totalTokens >= 1_000
+          ? `${(summary.totalTokens / 1_000).toFixed(1)}k`
+          : String(summary.totalTokens);
+    console.log(
+      `wick: ${tokens} tokens ≈ ${cost} across ${summary.sessions} session${
+        summary.sessions === 1 ? "" : "s"
+      }`,
+    );
+    if (summary.unknownModels.length > 0) {
+      console.error(
+        `wick: no pricing for ${summary.unknownModels.join(", ")} — cost shown is a lower bound`,
+      );
+    }
   });
 
 program

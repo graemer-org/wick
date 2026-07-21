@@ -11,6 +11,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 try {
+  // The CI skip is deliberate: don't silently mutate hook files in ephemeral,
+  // non-interactive checkouts. CI that wants to capture a run's cost calls wick
+  // explicitly instead of relying on installed hooks — see action.yml `mode:
+  // stamp` (`wick hook post-commit` / `wick cost`). Not a bug (cf. issue #33).
   if (process.env.WICK_AUTOINSTALL === "0" || process.env.CI) process.exit(0);
 
   const pkgRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));

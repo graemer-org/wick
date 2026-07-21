@@ -45,6 +45,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Record HEAD before the agent runs so the stamp step can tell whether
+      # this run produced a commit (stamp it) or only answered (comment cost).
+      - name: Record base commit
+        id: base
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Run Claude
         uses: anthropics/claude-code-action@v1
         with:
@@ -52,3 +59,14 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           claude_args: |
             --model claude-sonnet-5
+
+      # Capture this run's AI cost: stamp + push notes if the agent committed,
+      # otherwise post the cost as a comment on the triggering issue/PR.
+      - name: Capture AI cost
+        if: always()
+        uses: ./
+        with:
+          mode: stamp
+          base-sha: ${{ steps.base.outputs.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          comment-issue: ${{ github.event.issue.number || github.event.pull_request.number }}

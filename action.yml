@@ -6,9 +6,17 @@ inputs:
     required: false
     default: ${{ github.token }}
   mode:
-    description: "'report' posts the sticky PR cost comment; 'reconcile' remaps stamps after a squash/rebase merge (run on pull_request closed+merged)"
+    description: "'report' posts the sticky PR cost comment; 'reconcile' remaps stamps after a squash/rebase merge (run on pull_request closed+merged); 'stamp' captures a CI run's cost — stamps + pushes notes when the run made a commit, else posts an informational cost comment"
     required: false
     default: "report"
+  base-sha:
+    description: "'stamp' mode: HEAD before the agent ran; when HEAD is unchanged the run made no commit and the cost is reported as a comment instead of stamped"
+    required: false
+    default: ""
+  comment-issue:
+    description: "'stamp' mode: issue/PR number to post the cost comment on when the run made no commit; omit to only log the cost"
+    required: false
+    default: ""
 runs:
   using: "composite"
   steps:
@@ -73,6 +81,50 @@ runs:
         fi
 
         git push origin refs/notes/wick
+
+    - name: Stamp AI cost (or comment when no commit)
+      if: ${{ inputs.mode == 'stamp' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        COMMENT_ISSUE: ${{ inputs.comment-issue }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        WICK="node ${{ github.action_path }}/dist/cli.js"
+        # git notes needs a committer identity; runners have none.
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        HEAD_SHA=$(git rev-parse HEAD)
+
+        if [ -n "$BASE_SHA" ] && [ "$HEAD_SHA" = "$BASE_SHA" ]; then
+          # No commit this run — there is nothing to anchor a stamp to, and
+          # stamping the pre-existing HEAD would pollute a commit already
+          # reported in its own PR range. Surface the run's cost as a comment.
+          $WICK cost --json > /tmp/wick-cost.json
+          cat /tmp/wick-cost.json
+          if [ -n "$COMMENT_ISSUE" ]; then
+            BODY=$(node -e '
+              const s = JSON.parse(require("fs").readFileSync("/tmp/wick-cost.json", "utf8"));
+              const t = s.totalTokens;
+              const tok = t >= 1e6 ? (t / 1e6).toFixed(1) + "M" : t >= 1e3 ? (t / 1e3).toFixed(1) + "k" : String(t);
+              const cost = s.costUsd === null ? "n/a" : "$" + s.costUsd.toFixed(2);
+              process.stdout.write(`🤖 wick: this @claude run used ${tok} tokens ≈ ${cost} (no commit produced).`);
+            ')
+            gh issue comment "$COMMENT_ISSUE" --repo "$REPO" --body "$BODY"
+          else
+            echo "no comment-issue provided — cost logged only"
+          fi
+          exit 0
+        fi
+
+        # A commit landed this run — stamp it from the runner's Claude Code
+        # transcripts (delta vs the empty CI state = the whole run) and push the
+        # notes ref via the safe fetch→merge→force-with-lease path (never a bare
+        # push). Both calls exit 0 by design; a missing transcript is a no-op.
+        $WICK hook post-commit --commit "$HEAD_SHA"
+        $WICK hook pre-push --remote origin
 
     - name: Generate report
       if: ${{ inputs.mode == 'report' }}

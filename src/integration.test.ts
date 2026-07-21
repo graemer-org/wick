@@ -1,14 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import * as path from "node:path";
 import { install, uninstall, hasWickBlock } from "./install.js";
 import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
-import { postCommit, postRewrite } from "./hooks/index.js";
+import { postCommit, postRewrite, prePush } from "./hooks/index.js";
 import { readNote, syncNotesFromRemote, writeNote } from "./notes.js";
-import { buildReport } from "./report.js";
-import { clearProviders, registerProvider, type SessionUsage } from "./providers/types.js";
+import { buildReport, summarizeCost } from "./report.js";
+import { clearProviders, collectUsage, registerProvider, type SessionUsage } from "./providers/types.js";
+import type { PricingTable } from "./pricing.js";
 import { TestFactory } from "./test-factory.js";
 
 describe("installer (chain-safe)", () => {
@@ -553,5 +554,67 @@ describe("syncNotesFromRemote (auto-fetch on report)", () => {
 
     // Act + Assert
     expect(syncNotesFromRemote("origin", repoPath)).toBe("no-remote");
+  });
+});
+
+describe("CI capture (issue #33) — stamp + push with hooks never installed", () => {
+  beforeEach(() => clearProviders());
+  afterEach(() => {
+    clearProviders();
+    vi.unstubAllEnvs();
+  });
+
+  it("stamps a commit in a CI-shaped checkout that never installed hooks", async () => {
+    // Arrange — mimic CI: CI=1 (prepare.mjs would skip hook install), a fresh
+    // repo with no wick hooks, and a session that burned tokens during the run.
+    vi.stubEnv("CI", "1");
+    const repoPath = TestFactory.makeRepo();
+    registerProvider(TestFactory.makeMockProvider("mock-provider", { output: 500 }));
+    const ciCommit = TestFactory.makeCommit(repoPath, "agent change made in CI");
+
+    // Act — the action's stamp step calls this directly, no installed hook.
+    await postCommit(repoPath, ciCommit);
+
+    // Assert — the CI commit carries the run's usage.
+    const note = readNote(ciCommit, repoPath);
+    expect(note).not.toBeNull();
+    expect(note!.sessions[0]).toMatchObject({ provider: "mock-provider", output: 500 });
+  });
+
+  it("pushes the stamped notes ref to the remote via the pre-push path", async () => {
+    // Arrange — a stamped commit and a bare remote to push to.
+    const repoPath = TestFactory.makeRepo();
+    registerProvider(TestFactory.makeMockProvider("mock-provider", { output: 42 }));
+    const stampedCommit = TestFactory.makeCommit(repoPath, "stamped change");
+    await postCommit(repoPath, stampedCommit);
+    const remotePath = TestFactory.addBareRemote(repoPath);
+
+    // Act — the stamp step's `wick hook pre-push --remote origin`.
+    await prePush(repoPath, "origin");
+
+    // Assert — refs/notes/wick exists on the remote and carries the stamp.
+    expect(TestFactory.git(remotePath, "git", "rev-parse", "refs/notes/wick")).not.toBe("");
+    expect(readNote(stampedCommit, remotePath)!.sessions[0].output).toBe(42);
+  });
+
+  it("wick cost totals the current run without writing a note or state", async () => {
+    // Arrange — a fresh repo (no stamp, no hooks) with a burning session and a
+    // pricing table that prices the mock model.
+    const repoPath = TestFactory.makeRepo();
+    registerProvider(TestFactory.makeMockProvider("mock-provider", { output: 1_000_000 }));
+    const pricing: PricingTable = {
+      "mock-provider": [{ match: "mock-model-x", input: 0, cacheRead: 0, cacheWrite: 0, output: 3 }],
+    };
+    const head = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+
+    // Act — the exact read-only path `wick cost` runs.
+    const summary = summarizeCost(await collectUsage(repoPath, {}), pricing);
+
+    // Assert — cost/tokens computed, and nothing was mutated.
+    expect(summary.totalTokens).toBe(1_000_007); // 1M output + 7 input
+    expect(summary.costUsd).toBeCloseTo(3); // 1M output × $3/1M
+    expect(summary.sessions).toBe(1);
+    expect(readNote(head, repoPath)).toBeNull();
+    expect(existsSync(path.join(repoPath, ".git", "wick", "state.json"))).toBe(false);
   });
 });

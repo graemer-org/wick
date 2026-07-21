@@ -1,7 +1,8 @@
 import { loadConfig, type BudgetConfig } from "./config.js";
 import { defaultBranch, git, repoRoot, tryGit } from "./git.js";
 import { readNote } from "./notes.js";
-import { costUsd, loadPricing } from "./pricing.js";
+import { costUsd, loadPricing, type PricingTable, type TokenCounts } from "./pricing.js";
+import type { SessionUsage } from "./providers/types.js";
 
 export interface CommitReport {
   commit: string;
@@ -82,6 +83,63 @@ export function evaluateBudget(spentUsd: number | null, cfg: BudgetConfig): Budg
     usedUsd: spentUsd,
     usedFraction: fraction,
     status: fraction > 1 ? "over" : fraction >= cfg.warnAt ? "warn" : "ok",
+  };
+}
+
+export interface CostSummary {
+  tokens: TokenCounts;
+  totalTokens: number;
+  /** null only when nothing could be priced (some models unknown, none known). */
+  costUsd: number | null;
+  sessions: number;
+  perModel: Array<{ provider: string; model: string; tokens: TokenCounts; costUsd: number | null }>;
+  unknownModels: string[];
+}
+
+/**
+ * Total the cost of a set of live sessions, independent of any commit or range.
+ * Used by `wick cost` to answer "what has the AI usage touching this repo cost
+ * so far" (on a fresh CI runner, that equals the current run's cost). Read-only:
+ * it computes no delta and mutates neither notes nor `.git/wick/state.json`.
+ * Follows the report's pricing convention — an unknown model contributes tokens
+ * but no cost and is listed in `unknownModels`; `costUsd` is null only when
+ * nothing at all could be priced.
+ */
+export function summarizeCost(usage: SessionUsage[], pricing: PricingTable): CostSummary {
+  const tokens: TokenCounts = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+  const perModel: CostSummary["perModel"] = [];
+  const unknownModels = new Set<string>();
+  let totalCost = 0;
+  let sawUnknown = false;
+  for (const session of usage) {
+    for (const model of session.perModel) {
+      const modelTokens: TokenCounts = {
+        input: model.input,
+        cacheRead: model.cacheRead,
+        cacheWrite: model.cacheWrite,
+        output: model.output,
+      };
+      tokens.input += model.input;
+      tokens.cacheRead += model.cacheRead;
+      tokens.cacheWrite += model.cacheWrite;
+      tokens.output += model.output;
+      const c = costUsd(pricing, session.provider, model.model, modelTokens);
+      if (c === null) {
+        sawUnknown = true;
+        unknownModels.add(`${session.provider}/${model.model}`);
+      } else {
+        totalCost += c;
+      }
+      perModel.push({ provider: session.provider, model: model.model, tokens: modelTokens, costUsd: c });
+    }
+  }
+  return {
+    tokens,
+    totalTokens: tokens.input + tokens.cacheRead + tokens.cacheWrite + tokens.output,
+    costUsd: sawUnknown && totalCost === 0 ? null : totalCost,
+    sessions: usage.length,
+    perModel,
+    unknownModels: [...unknownModels],
   };
 }
 
