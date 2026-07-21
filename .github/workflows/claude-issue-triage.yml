@@ -26,12 +26,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Record HEAD so the cost step knows this run made no commit (triage only).
-      - name: Record base commit
-        id: base
-        shell: bash
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
       - name: Triage the issue with Claude
         uses: anthropics/claude-code-action@v1
         with:
@@ -86,14 +80,14 @@ jobs:
             --allowedTools "mcp__github_comment__update_claude_comment,Bash(gh issue:*),Bash(gh label:*),Read,Grep,Glob"
 
       # Dogfood: triage burns tokens and makes no commit, so post its cost as a
-      # comment on the issue (no-commit path — nothing to stamp). This step runs
-      # fixed action code post-triage; it never executes untrusted issue content,
-      # and the comment carries only token/cost numbers (no model strings).
+      # comment on the issue. comment-only — never stamp. This step runs fixed
+      # action code post-triage; it never executes untrusted issue content, and
+      # the comment carries only token/cost numbers (no model strings).
       - name: Capture AI cost
         if: always()
         uses: ./
         with:
           mode: stamp
-          base-sha: ${{ steps.base.outputs.sha }}
+          comment-only: "true"
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-issue: ${{ github.event.issue.number }}

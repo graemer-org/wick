@@ -17,6 +17,10 @@ inputs:
     description: "'stamp' mode: issue/PR number to post the cost comment on when the run made no commit; omit to only log the cost"
     required: false
     default: ""
+  comment-only:
+    description: "'stamp' mode: set 'true' for workflows that never make a dev commit (PR review, issue triage) — always report the cost as a comment, never stamp. Skips HEAD detection, which is unreliable when the surrounding action moves HEAD (e.g. checks out the PR head)."
+    required: false
+    default: ""
 runs:
   using: "composite"
   steps:
@@ -92,10 +96,38 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         BASE_SHA: ${{ inputs.base-sha }}
         COMMENT_ISSUE: ${{ inputs.comment-issue }}
+        COMMENT_ONLY: ${{ inputs.comment-only }}
         REPO: ${{ github.repository }}
       run: |
         set -euo pipefail
         WICK="node ${{ github.action_path }}/dist/cli.js"
+
+        # Report this run's cost (from the runner's transcripts) as a comment.
+        # Reuses `wick cost`'s rendered line — the single source of truth for the
+        # token/cost formatting — rather than re-deriving it here.
+        post_cost_comment() {
+          COST_LINE=$($WICK cost)
+          echo "$COST_LINE"
+          if [ -z "$COMMENT_ISSUE" ]; then
+            echo "no comment-issue provided — cost logged only"
+          elif [[ "$COST_LINE" == *"across 0 sessions"* ]]; then
+            # A genuinely no-op run (agent skipped, transcript not flushed) has
+            # no cost worth a comment — logging it above is enough.
+            echo "no sessions found — skipping comment"
+          else
+            gh issue comment "$COMMENT_ISSUE" --repo "$REPO" \
+              --body "🤖 ${COST_LINE} — no commit produced."
+          fi
+        }
+
+        # Review/triage never make a dev commit, so don't try to detect one:
+        # the surrounding claude-code-action moves HEAD (it checks out the PR
+        # head), which would false-trigger the "commit landed" branch. Always
+        # comment the cost instead.
+        if [ "$COMMENT_ONLY" = "true" ]; then
+          post_cost_comment
+          exit 0
+        fi
 
         # base-sha is how we tell a fresh commit from a question-only run.
         # Without it we can't decide, and a blind stamp would double-count the
@@ -111,23 +143,9 @@ runs:
         HEAD_SHA=$(git rev-parse HEAD)
 
         if [ "$HEAD_SHA" = "$BASE_SHA" ]; then
-          # No commit this run — there is nothing to anchor a stamp to, and
-          # stamping the pre-existing HEAD would pollute a commit already
-          # reported in its own PR range. Surface the run's cost as a comment.
-          # Reuse `wick cost`'s own rendered line (single source of truth for
-          # the token/cost formatting) rather than re-deriving it here.
-          COST_LINE=$($WICK cost)
-          echo "$COST_LINE"
-          if [ -z "$COMMENT_ISSUE" ]; then
-            echo "no comment-issue provided — cost logged only"
-          elif [[ "$COST_LINE" == *"across 0 sessions"* ]]; then
-            # A genuinely no-op run (agent skipped, transcript not flushed) has
-            # no cost worth a comment — logging it above is enough.
-            echo "no sessions found — skipping comment"
-          else
-            gh issue comment "$COMMENT_ISSUE" --repo "$REPO" \
-              --body "🤖 ${COST_LINE} — no commit produced."
-          fi
+          # No commit this run — nothing to anchor a stamp to, and stamping the
+          # pre-existing HEAD would pollute a commit reported in its own PR range.
+          post_cost_comment
           exit 0
         fi
 
