@@ -9,8 +9,8 @@ import { postCommit, postMerge, postRewrite, prePush } from "./hooks/index.js";
 import {
   buildBadge,
   buildReport,
+  formatCostOutput,
   renderBadgeSvg,
-  renderCostLine,
   renderReport,
   summarizeCost,
 } from "./report.js";
@@ -147,22 +147,20 @@ program
   )
   .option("--json", "machine-readable output")
   .action(async (opts: { json?: boolean }) => {
-    const cwd = process.cwd();
-    const root = repoRoot(cwd);
-    // Read-only: collect current cumulative usage and price it. No delta, no
-    // note write, no state mutation — this must not disturb the stamp baselines.
-    const usage = await collectUsage(root, {});
-    const summary = summarizeCost(usage, loadPricing(root));
-    if (opts.json) {
-      console.log(JSON.stringify(summary, null, 2));
+    let root: string;
+    try {
+      root = repoRoot(process.cwd());
+    } catch {
+      console.error("wick: not inside a git repository");
+      process.exitCode = 1;
       return;
     }
-    console.log(renderCostLine(summary));
-    if (summary.unknownModels.length > 0) {
-      console.error(
-        `wick: no pricing for ${summary.unknownModels.join(", ")} — cost shown is a lower bound`,
-      );
-    }
+    // Read-only: collect current cumulative usage and price it. No delta, no
+    // note write, no state mutation — this must not disturb the stamp baselines.
+    const summary = summarizeCost(await collectUsage(root, {}), loadPricing(root));
+    const out = formatCostOutput(summary, opts.json === true);
+    console.log(out.stdout);
+    if (out.stderr) console.error(out.stderr);
   });
 
 program

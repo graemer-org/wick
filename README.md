@@ -112,10 +112,10 @@ steps:
       comment-issue: ${{ github.event.issue.number || github.event.pull_request.number }}
 ```
 
-If the agent committed, the commit is stamped and `refs/notes/wick` is pushed like any local commit. If it only answered (no commit), there's nothing to anchor a note to, so the run's cost is posted as a one-line comment instead — `wick cost` computes it from the same transcripts:
+If the agent committed, the commit is stamped and `refs/notes/wick` is pushed like any local commit. If it only answered (no commit), there's nothing to anchor a note to, so the run's cost is logged, and — when `comment-issue` is set — also posted as a one-line comment (`wick cost` computes it from the same transcripts):
 
 ```
-🤖 wick: this @claude run used 82.4k tokens ≈ $0.41 (no commit produced).
+🤖 wick: 82.4k tokens ≈ $0.41 across 1 session — no commit produced.
 ```
 
 ## Cost badge

@@ -7,7 +7,7 @@ import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { postCommit, postRewrite, prePush } from "./hooks/index.js";
 import { readNote, syncNotesFromRemote, writeNote } from "./notes.js";
-import { buildReport, renderCostLine, summarizeCost } from "./report.js";
+import { buildReport, formatCostOutput, renderCostLine, summarizeCost } from "./report.js";
 import { clearProviders, collectUsage, registerProvider, type SessionUsage } from "./providers/types.js";
 import type { PricingTable } from "./pricing.js";
 import { TestFactory } from "./test-factory.js";
@@ -634,6 +634,37 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     expect(summary.costUsd).toBeCloseTo(4); // 1M × $4/1M from the priced model only
     expect(summary.unknownModels).toEqual(["claude-code/mystery-model"]);
     expect(summary.totalTokens).toBe(3_000_000);
+  });
+
+  it("folds repeated models into one perModel row", () => {
+    // Arrange — two sessions burning the same model.
+    const usage: SessionUsage[] = [
+      TestFactory.makeSessionUsage("s1", "same-model", { output: 100 }),
+      TestFactory.makeSessionUsage("s2", "same-model", { output: 400 }),
+    ];
+
+    // Act
+    const summary = summarizeCost(usage, {});
+
+    // Assert — one aggregated row, not one per session.
+    expect(summary.perModel).toHaveLength(1);
+    expect(summary.perModel[0]).toMatchObject({ model: "same-model", tokens: { output: 500 } });
+    expect(summary.sessions).toBe(2);
+  });
+
+  it("formatCostOutput switches between JSON and the human line + warning", () => {
+    // Arrange — a summary with an unpriced model so the lower-bound warning fires.
+    const summary = summarizeCost([TestFactory.makeSessionUsage("s1", "mystery", { output: 50_000 })], {});
+
+    // Act
+    const human = formatCostOutput(summary, false);
+    const json = formatCostOutput(summary, true);
+
+    // Assert — human line + stderr warning; JSON is the parseable summary, no warning.
+    expect(human.stdout).toBe(renderCostLine(summary));
+    expect(human.stderr).toContain("no pricing for claude-code/mystery");
+    expect(JSON.parse(json.stdout).totalTokens).toBe(50_000);
+    expect(json.stderr).toBeUndefined();
   });
 
   it("renderCostLine formats tokens, cost and session plurality", () => {
