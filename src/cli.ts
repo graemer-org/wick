@@ -64,7 +64,7 @@ program
     try {
       root = repoRoot(cwd);
     } catch {
-      console.log("wick: not inside a git repository");
+      console.error("wick: not inside a git repository");
       process.exitCode = 1;
       return;
     }

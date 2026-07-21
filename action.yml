@@ -6,7 +6,7 @@ inputs:
     required: false
     default: ${{ github.token }}
   mode:
-    description: "'report' posts the sticky PR cost comment; 'reconcile' remaps stamps after a squash/rebase merge (run on pull_request closed+merged); 'stamp' captures a CI run's cost — stamps + pushes notes when the run made a commit, else posts an informational cost comment"
+    description: "'report' posts the sticky PR cost comment; 'reconcile' remaps stamps after a squash/rebase merge (run on pull_request closed+merged); 'stamp' captures a CI run's cost — stamps + pushes notes when the run made a commit, else logs the cost (and posts it as a comment if comment-issue is set)"
     required: false
     default: "report"
   base-sha:
