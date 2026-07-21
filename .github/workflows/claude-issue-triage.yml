@@ -58,5 +58,6 @@ jobs:
             Post the comment with `gh issue comment`. Be concise and specific; do not
             edit code or open a PR — this is triage only.
           claude_args: |
+            --model claude-sonnet-5
             --max-turns 25
             --allowedTools "Bash(gh issue:*),Bash(gh label:*),Bash(npm:*),Bash(node:*),Bash(git:*),Read,Grep,Glob"
