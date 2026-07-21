@@ -1,0 +1,60 @@
+name: Claude PR Review
+
+# On every PR, run one Claude job that dispatches to the six specialist review
+# subagents in .claude/agents/ (code quality, performance, security, tests,
+# UI/UX, documentation) and posts a single consolidated review. track_progress
+# shows a live checklist while the sub-reviews run.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # Full history so the merge-base diff and by-author breakdown resolve.
+          fetch-depth: 0
+
+      - name: Review the PR with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          track_progress: true
+          prompt: |
+            Review this pull request in ${{ github.repository }}.
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Read CLAUDE.md first. Then examine the PR diff against its merge base
+            (`gh pr diff ${{ github.event.pull_request.number }}`).
+
+            Orchestrate a full review by delegating to these six specialist
+            subagents (defined in .claude/agents/) with the Task tool. Run each on
+            the PR's changes:
+
+            - code-quality-reviewer        — clean code, error handling, TS idioms
+            - performance-reviewer         — hot paths, IO, subprocess overhead
+            - security-code-reviewer       — injection, path handling, notes-ref safety
+            - test-reviewer                — coverage, AAA tests, invariant regressions
+            - ui-ux-reviewer               — build & run the CLI, capture terminal
+                                             output, summarize the feature's UX
+            - documentation-accuracy-reviewer — README/CLAUDE.md/--help accuracy
+
+            Then post ONE consolidated review, organized under a heading per lens,
+            most important findings first. Use inline comments
+            (mcp__github_inline_comment__create_inline_comment) for specific
+            file:line issues, and a top-level summary comment for the overall verdict
+            and the UI/UX section (embed the captured terminal output and the feature
+            summary there). Skip a lens with a one-line "no concerns" note rather than
+            padding. Do not modify code or push commits — review only.
+          claude_args: |
+            --max-turns 40
+            --allowedTools "Task,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(npm:*),Bash(node:*),Bash(git:*),Read,Grep,Glob"
