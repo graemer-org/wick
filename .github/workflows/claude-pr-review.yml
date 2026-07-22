@@ -107,7 +107,12 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          track_progress: true
+          # track_progress is only supported for pull_request actions opened,
+          # synchronize, ready_for_review, reopened — NOT `labeled`. A `review`
+          # label triggers this job too, so gate it or the action hard-fails.
+          # The review posts via gh pr comment + inline comments regardless, so
+          # dropping the live progress comment on a labeled run costs nothing.
+          track_progress: ${{ github.event.action != 'labeled' }}
           prompt: |
             Review this pull request in ${{ github.repository }}.
             PR NUMBER: ${{ github.event.pull_request.number }}
