@@ -7,7 +7,7 @@ import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { postCommit, postRewrite, prePush } from "./hooks/index.js";
 import { readNote, syncNotesFromRemote, writeNote } from "./notes.js";
-import { buildReport, formatCostOutput, renderCostLine, summarizeCost } from "./report.js";
+import { buildBadgeReport, buildReport, formatCostOutput, renderCostLine, summarizeCost } from "./report.js";
 import { clearProviders, collectUsage, registerProvider, type SessionUsage } from "./providers/types.js";
 import type { PricingTable } from "./pricing.js";
 import { TestFactory } from "./test-factory.js";
@@ -286,6 +286,48 @@ describe("report ranges", () => {
     expect(report.commits).toHaveLength(1);
     expect(report.commits[0].commit).toBe(branchCommit);
     expect(report.totals.tokens.output).toBe(30); // only the branch delta
+  });
+
+  it("badge report defaults to full history even on a feature branch", async () => {
+    // Arrange — a stamped commit on main, then more spend on a feature branch.
+    const repoPath = TestFactory.makeRepo();
+    const sessionTotals = { output: 50 };
+    registerProvider(TestFactory.makeMockProvider("mock", sessionTotals));
+    const mainCommit = TestFactory.makeCommit(repoPath, "main work");
+    await postCommit(repoPath, mainCommit);
+    TestFactory.git(repoPath, "git", "checkout", "-q", "-b", "feature");
+    sessionTotals.output = 80;
+    const branchCommit = TestFactory.makeCommit(repoPath, "branch work");
+    await postCommit(repoPath, branchCommit);
+
+    // Act — same repo state where `buildReport` narrows to merge-base..HEAD.
+    const badgeReport = buildBadgeReport(repoPath);
+
+    // Assert — the badge sees all-time spend, not just the branch delta.
+    expect(badgeReport.range).toBe("HEAD");
+    expect(badgeReport.commits).toHaveLength(2);
+    expect(badgeReport.totals.tokens.output).toBe(80); // 50 on main + 30 on the branch
+  });
+
+  it("badge report still honors an explicit range", async () => {
+    // Arrange — two stamped commits so a narrowing range is observable.
+    const repoPath = TestFactory.makeRepo();
+    const sessionTotals = { output: 50 };
+    registerProvider(TestFactory.makeMockProvider("mock", sessionTotals));
+    const olderCommit = TestFactory.makeCommit(repoPath, "older work");
+    await postCommit(repoPath, olderCommit);
+    sessionTotals.output = 80;
+    const newerCommit = TestFactory.makeCommit(repoPath, "newer work");
+    await postCommit(repoPath, newerCommit);
+
+    // Act
+    const badgeReport = buildBadgeReport(repoPath, "HEAD~1..HEAD");
+
+    // Assert — only the newest commit's delta, not full history.
+    expect(badgeReport.range).toBe("HEAD~1..HEAD");
+    expect(badgeReport.commits).toHaveLength(1);
+    expect(badgeReport.commits[0].commit).toBe(newerCommit);
+    expect(badgeReport.totals.tokens.output).toBe(30);
   });
 
   it("aggregates costs by commit author", async () => {

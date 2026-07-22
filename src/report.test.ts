@@ -42,6 +42,34 @@ describe("buildBadge", () => {
     // Act + Assert
     expect(buildBadge(TestFactory.makeReport(1), "AI spend").label).toBe("AI spend");
   });
+
+  it("marks a lower-bound cost with ≥ and caps the color at yellow", () => {
+    // Arrange — a range containing a model without pricing: the total is a
+    // lower bound, so the badge must not read as a reassuring green.
+    const lowerBoundReport = TestFactory.makeReport(3.08, ["claude-code/claude-future-1"]);
+
+    // Act
+    const badge = buildBadge(lowerBoundReport);
+
+    // Assert
+    expect(badge).toEqual({
+      schemaVersion: 1,
+      label: "🕯️ wick",
+      message: "≥ $3.08 burned",
+      color: "yellow",
+    });
+  });
+
+  it("keeps hotter-than-yellow colors on a lower bound", () => {
+    // Arrange
+    const unknownModels = ["claude-code/claude-future-1"];
+
+    // Act + Assert — green tiers cap at yellow; yellow and hotter stay put.
+    expect(buildBadge(TestFactory.makeReport(23.41, unknownModels)).color).toBe("yellow");
+    expect(buildBadge(TestFactory.makeReport(100, unknownModels)).color).toBe("yellow");
+    expect(buildBadge(TestFactory.makeReport(500, unknownModels)).color).toBe("orange");
+    expect(buildBadge(TestFactory.makeReport(2000, unknownModels)).color).toBe("red");
+  });
 });
 
 describe("evaluateBudget", () => {

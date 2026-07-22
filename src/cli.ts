@@ -8,6 +8,7 @@ import { install, uninstall, hasWickBlock, HOOK_EVENTS } from "./install.js";
 import { postCommit, postMerge, postRewrite, prePush } from "./hooks/index.js";
 import {
   buildBadge,
+  buildBadgeReport,
   buildReport,
   formatCostOutput,
   renderBadgeSvg,
@@ -129,13 +130,13 @@ program
 program
   .command("badge")
   .description(
-    "shields.io endpoint JSON for the cost of a commit range (default: full history on the default branch)",
+    "shields.io endpoint JSON for the cost of a commit range (default: full history, regardless of the current branch)",
   )
   .argument("[range]", "git revision range, e.g. HEAD or main..HEAD")
   .option("--label <label>", "badge label", "🕯️ wick")
   .option("--svg", "emit a self-hosted SVG instead of endpoint JSON (works on private repos)")
   .action((range: string | undefined, opts: { label: string; svg?: boolean }) => {
-    const report = buildReport(process.cwd(), range);
+    const report = buildBadgeReport(process.cwd(), range);
     const badge = buildBadge(report, opts.label);
     console.log(opts.svg ? renderBadgeSvg(badge) : JSON.stringify(badge));
   });

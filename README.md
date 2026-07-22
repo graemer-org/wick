@@ -124,7 +124,7 @@ The badge at the top of this README is the live, all-time cost of building Wick.
 
 ```bash
 wick badge            # shields.io endpoint JSON for the whole default branch
-# {"schemaVersion":1,"label":"🕯️ wick","message":"$23.41 burned","color":"brightgreen"}
+# {"schemaVersion":1,"label":"🕯️ wick","message":"$23.41 burned","color":"green"}
 wick badge --svg      # self-hosted SVG — no shields.io, works on private repos
 ```
 

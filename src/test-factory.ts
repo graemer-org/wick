@@ -346,7 +346,7 @@ export const TestFactory = {
   // ---------------------------------------------------------------- report ----
 
   /** A minimal Report carrying only a total cost, for renderer/badge tests. */
-  makeReport(costUsd: number | null): Report {
+  makeReport(costUsd: number | null, unknownModels: string[] = []): Report {
     return {
       range: "HEAD",
       commits: [],
@@ -358,7 +358,7 @@ export const TestFactory = {
         stampedCommits: 0,
         commits: 0,
       },
-      unknownModels: [],
+      unknownModels,
     };
   },
 };
