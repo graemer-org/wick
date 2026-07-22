@@ -1,1 +1,1 @@
-{"v":1,"sessions":[{"id":"37801098-7520-47bb-88cd-0f9007d203ea","provider":"claude-code","model":"claude-fable-5","input":4,"cacheRead":44229,"cacheWrite":11619,"output":576}]}
+{"v":1,"sessions":[{"id":"37801098-7520-47bb-88cd-0f9007d203ea","provider":"claude-code","model":"claude-fable-5","input":4,"cacheRead":44229,"cacheWrite":11619,"output":576},{"id":"d629277a-5db9-434a-834e-c31f66678285","provider":"claude-code","model":"claude-opus-4-8","input":360,"cacheRead":30449559,"cacheWrite":320619,"output":160188}]}
