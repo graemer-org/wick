@@ -31,6 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_review: ${{ steps.decide.outputs.should_review }}
+      # Commit the latest automatic review was submitted against — lets a
+      # re-review scope itself to just the new commits (empty on a first review).
+      since_sha: ${{ steps.decide.outputs.since_sha }}
     steps:
       - name: Decide whether to review
         id: decide
@@ -43,6 +46,15 @@ jobs:
         run: |
           set -euo pipefail
           decide() { echo "should_review=$1" >> "$GITHUB_OUTPUT"; echo "$2"; }
+
+          # This PR's prior automatic reviews and the commit the latest one was
+          # submitted against. The sha lets a re-review scope itself to just the
+          # new commits (incremental); it's empty on a first review.
+          REVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews" \
+            --jq '[.[] | select(.user.login | test("github-actions"))]' 2>/dev/null || echo "[]")
+          ROUNDS=$(echo "$REVIEWS" | jq 'length')
+          SINCE_SHA=$(echo "$REVIEWS" | jq -r '(last // {}).commit_id // ""')
+          echo "since_sha=$SINCE_SHA" >> "$GITHUB_OUTPUT"
 
           # A `review` label is an explicit "review again" request — always honour
           # it, regardless of how many rounds the PR has already had.
@@ -63,8 +75,6 @@ jobs:
 
           # A push (synchronize): review only until the per-PR round cap, so a run
           # of fix-up commits can't drive an unbounded review→fix→review loop.
-          ROUNDS=$(gh pr view "$PR" --repo "$REPO" --json reviews \
-            --jq '[.reviews[] | select(.author.login | test("github-actions"))] | length')
           if [ "$ROUNDS" -lt "$MAX_AUTO_ROUNDS" ]; then
             decide true "synchronize — round $((ROUNDS + 1))/$MAX_AUTO_ROUNDS"
             exit 0
@@ -105,10 +115,16 @@ jobs:
             Read CLAUDE.md first. Then read the existing review threads on this PR
             (`gh pr view ${{ github.event.pull_request.number }} --json reviews,comments`):
             this may be a re-review. Do NOT re-raise any point already made in an
-            earlier round or already addressed by a later commit — focus on what
-            changed since your last review.
+            earlier round or already addressed by a later commit.
 
-            Examine the PR diff against its merge base
+            SINCE COMMIT: ${{ needs.gate.outputs.since_sha }}
+
+            If SINCE COMMIT above is non-empty, this is a re-review: scope it to
+            just the commits added since then. Run `git diff <SINCE COMMIT>..HEAD`
+            (or narrow `gh pr diff` to the files it lists) and review ONLY those
+            changes — don't re-examine code that was already reviewed and is
+            unchanged. If SINCE COMMIT is empty or that commit isn't reachable,
+            review the full PR diff against its merge base
             (`gh pr diff ${{ github.event.pull_request.number }}`).
 
             Orchestrate a full review by delegating to these six specialist
