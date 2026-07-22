@@ -1,12 +1,20 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
-import { registerProvider, getProviders } from "./providers/types.js";
+import { registerProvider, getProviders, collectUsage } from "./providers/types.js";
 import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { install, uninstall, hasWickBlock, HOOK_EVENTS } from "./install.js";
 import { postCommit, postMerge, postRewrite, prePush } from "./hooks/index.js";
-import { buildBadge, buildReport, renderBadgeSvg, renderReport } from "./report.js";
+import {
+  buildBadge,
+  buildReport,
+  formatCostOutput,
+  renderBadgeSvg,
+  renderReport,
+  summarizeCost,
+} from "./report.js";
+import { loadPricing } from "./pricing.js";
 import { notesRemote, repoRoot, tryGit } from "./git.js";
 import { loadState } from "./state.js";
 import { NOTES_REF, syncNotesFromRemote } from "./notes.js";
@@ -56,7 +64,7 @@ program
     try {
       root = repoRoot(cwd);
     } catch {
-      console.log("wick: not inside a git repository");
+      console.error("wick: not inside a git repository");
       process.exitCode = 1;
       return;
     }
@@ -130,6 +138,29 @@ program
     const report = buildReport(process.cwd(), range);
     const badge = buildBadge(report, opts.label);
     console.log(opts.svg ? renderBadgeSvg(badge) : JSON.stringify(badge));
+  });
+
+program
+  .command("cost")
+  .description(
+    "total token cost of the AI sessions touching this repo right now (no commit needed) — used by CI to report the cost of a run that produced no commit",
+  )
+  .option("--json", "machine-readable output")
+  .action(async (opts: { json?: boolean }) => {
+    let root: string;
+    try {
+      root = repoRoot(process.cwd());
+    } catch {
+      console.error("wick: not inside a git repository");
+      process.exitCode = 1;
+      return;
+    }
+    // Read-only: collect current cumulative usage and price it. No delta, no
+    // note write, no state mutation — this must not disturb the stamp baselines.
+    const summary = summarizeCost(await collectUsage(root, {}), loadPricing(root));
+    const out = formatCostOutput(summary, opts.json === true);
+    console.log(out.stdout);
+    if (out.stderr) console.error(out.stderr);
   });
 
 program

@@ -5,10 +5,11 @@ import * as path from "node:path";
 import { install, uninstall, hasWickBlock } from "./install.js";
 import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
-import { postCommit, postRewrite } from "./hooks/index.js";
+import { postCommit, postRewrite, prePush } from "./hooks/index.js";
 import { readNote, syncNotesFromRemote, writeNote } from "./notes.js";
-import { buildReport } from "./report.js";
-import { clearProviders, registerProvider, type SessionUsage } from "./providers/types.js";
+import { buildReport, formatCostOutput, renderCostLine, summarizeCost } from "./report.js";
+import { clearProviders, collectUsage, registerProvider, type SessionUsage } from "./providers/types.js";
+import type { PricingTable } from "./pricing.js";
 import { TestFactory } from "./test-factory.js";
 
 describe("installer (chain-safe)", () => {
@@ -553,5 +554,149 @@ describe("syncNotesFromRemote (auto-fetch on report)", () => {
 
     // Act + Assert
     expect(syncNotesFromRemote("origin", repoPath)).toBe("no-remote");
+  });
+});
+
+describe("CI capture (issue #33) — stamp + push with hooks never installed", () => {
+  beforeEach(() => clearProviders());
+  afterEach(() => clearProviders());
+
+  it("stamps a commit directly (no installed hook), as the CI stamp step does", async () => {
+    // Arrange — a fresh repo where `wick install` was never run (prepare.mjs
+    // skips hook install under CI) and a session that burned tokens.
+    const repoPath = TestFactory.makeRepo();
+    expect(existsSync(path.join(repoPath, ".git", "hooks", "post-commit"))).toBe(false);
+    registerProvider(TestFactory.makeMockProvider("mock-provider", { output: 500 }));
+    const ciCommit = TestFactory.makeCommit(repoPath, "agent change made in CI");
+
+    // Act — the action's stamp step calls this directly, no installed hook.
+    await postCommit(repoPath, ciCommit);
+
+    // Assert — the CI commit carries the run's usage.
+    const note = readNote(ciCommit, repoPath);
+    expect(note).not.toBeNull();
+    expect(note!.sessions[0]).toMatchObject({ provider: "mock-provider", output: 500 });
+  });
+
+  it("pushes the stamped notes ref to the remote via the pre-push path", async () => {
+    // Arrange — a stamped commit and a bare remote to push to.
+    const repoPath = TestFactory.makeRepo();
+    registerProvider(TestFactory.makeMockProvider("mock-provider", { output: 42 }));
+    const stampedCommit = TestFactory.makeCommit(repoPath, "stamped change");
+    await postCommit(repoPath, stampedCommit);
+    const remotePath = TestFactory.addBareRemote(repoPath);
+
+    // Act — the stamp step's `wick hook pre-push --remote origin`.
+    await prePush(repoPath, "origin");
+
+    // Assert — refs/notes/wick exists on the remote and carries the stamp.
+    expect(TestFactory.git(remotePath, "git", "rev-parse", "refs/notes/wick")).not.toBe("");
+    expect(readNote(stampedCommit, remotePath)!.sessions[0].output).toBe(42);
+  });
+
+  it("wick cost totals the current run without writing a note or state", async () => {
+    // Arrange — a fresh repo (no stamp, no hooks) with a burning session and a
+    // pricing table that prices the mock model.
+    const repoPath = TestFactory.makeRepo();
+    registerProvider(TestFactory.makeMockProvider("mock-provider", { output: 1_000_000 }));
+    const pricing: PricingTable = {
+      "mock-provider": [{ match: "mock-model-x", input: 0, cacheRead: 0, cacheWrite: 0, output: 3 }],
+    };
+    const head = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+
+    // Act — the exact read-only path `wick cost` runs.
+    const summary = summarizeCost(await collectUsage(repoPath, {}), pricing);
+
+    // Assert — cost/tokens computed, and nothing was mutated.
+    expect(summary.totalTokens).toBe(1_000_007); // 1M output + 7 input
+    expect(summary.costUsd).toBeCloseTo(3); // 1M output × $3/1M
+    expect(summary.sessions).toBe(1);
+    expect(readNote(head, repoPath)).toBeNull();
+    expect(existsSync(path.join(repoPath, ".git", "wick", "state.json"))).toBe(false);
+  });
+
+  it("prices the known model and skips the unknown one (never guess a price)", () => {
+    // Arrange — one session touching a priced model and an unpriced one.
+    const usage: SessionUsage[] = [
+      TestFactory.makeSessionUsage("s-known", "priced-model", { output: 1_000_000 }),
+      TestFactory.makeSessionUsage("s-unknown", "mystery-model", { output: 2_000_000 }),
+    ];
+    const pricing: PricingTable = {
+      "claude-code": [{ match: "priced-model", input: 0, cacheRead: 0, cacheWrite: 0, output: 4 }],
+    };
+
+    // Act
+    const summary = summarizeCost(usage, pricing);
+
+    // Assert — cost is the known model's cost (a lower bound), NOT null, and the
+    // unknown model is surfaced separately. This is the subtler half of the
+    // "unknown model → cost n/a, never guess" invariant.
+    expect(summary.costUsd).toBeCloseTo(4); // 1M × $4/1M from the priced model only
+    expect(summary.unknownModels).toEqual(["claude-code/mystery-model"]);
+    expect(summary.totalTokens).toBe(3_000_000);
+  });
+
+  it("folds repeated models into one perModel row", () => {
+    // Arrange — two sessions burning the same model.
+    const usage: SessionUsage[] = [
+      TestFactory.makeSessionUsage("s1", "same-model", { output: 100 }),
+      TestFactory.makeSessionUsage("s2", "same-model", { output: 400 }),
+    ];
+
+    // Act
+    const summary = summarizeCost(usage, {});
+
+    // Assert — one aggregated row, not one per session.
+    expect(summary.perModel).toHaveLength(1);
+    expect(summary.perModel[0]).toMatchObject({ model: "same-model", tokens: { output: 500 } });
+    expect(summary.sessions).toBe(2);
+  });
+
+  it("formatCostOutput switches between JSON and the human line + warning", () => {
+    // Arrange — a summary with an unpriced model so the lower-bound warning fires.
+    const summary = summarizeCost([TestFactory.makeSessionUsage("s1", "mystery", { output: 50_000 })], {});
+
+    // Act
+    const human = formatCostOutput(summary, false);
+    const json = formatCostOutput(summary, true);
+
+    // Assert — human line + stderr warning; JSON is the parseable summary, no warning.
+    expect(human.stdout).toBe(renderCostLine(summary));
+    expect(human.stderr).toContain("no pricing for claude-code/mystery");
+    expect(JSON.parse(json.stdout).totalTokens).toBe(50_000);
+    expect(json.stderr).toBeUndefined();
+  });
+
+  it("renderCostLine formats tokens, cost and session plurality", () => {
+    // Arrange — three summaries covering k/M suffixes, n/a cost, and plurality.
+    const priced = summarizeCost(
+      [TestFactory.makeSessionUsage("s1", "m", { output: 82_400 })],
+      { "claude-code": [{ match: "m", input: 0, cacheRead: 0, cacheWrite: 0, output: 5 }] },
+    );
+    const unknown = summarizeCost(
+      [TestFactory.makeSessionUsage("s1", "m", { output: 2_000_000 })],
+      {},
+    );
+
+    // Act + Assert
+    expect(renderCostLine(priced)).toBe("wick: 82.4k tokens ≈ $0.41 across 1 session");
+    expect(renderCostLine(unknown)).toBe("wick: 2.0M tokens ≈ n/a across 1 session");
+    expect(renderCostLine(summarizeCost([], {}))).toBe("wick: 0 tokens ≈ $0.00 across 0 sessions");
+  });
+
+  it("renders a 'wick: 0 tokens ' prefix whenever there is no usage (action skip guard)", () => {
+    // Arrange — the exact degenerate shape a run that errored immediately leaves:
+    // a discovered session with 0 tokens (and here an unpriced model).
+    const zeroTokenSession = summarizeCost(
+      [TestFactory.makeSessionUsage("s1", "mystery", { output: 0 })],
+      {},
+    );
+    const noSessions = summarizeCost([], {});
+
+    // Act + Assert — action.yml's comment-skip guard keys off this "wick: 0 tokens "
+    // prefix, so both the 0-session and 0-token-but-1-session cases must carry it.
+    expect(renderCostLine(zeroTokenSession).startsWith("wick: 0 tokens ")).toBe(true);
+    expect(renderCostLine(zeroTokenSession)).toBe("wick: 0 tokens ≈ n/a across 1 session");
+    expect(renderCostLine(noSessions).startsWith("wick: 0 tokens ")).toBe(true);
   });
 });

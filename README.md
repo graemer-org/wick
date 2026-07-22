@@ -85,6 +85,39 @@ jobs:
 
 Every PR gets one comment with the total cost (and a per-author split when several people pushed), updated in place on every push — no comment spam. The `reconcile` job detects how the PR was merged: merge commit → nothing to do, squash → all stamps consolidated onto the squash commit, rebase → stamps remapped 1:1. Merge however you like; the costs follow.
 
+## Capturing AI cost in CI
+
+When an AI agent runs inside a workflow (e.g. a `@claude` responder) the runner's git hooks aren't installed, so nothing stamps the commits it makes. Add `mode: stamp` after the agent step to capture that run's cost from the Claude Code transcripts left on the runner. Record HEAD first so the action can tell whether the run committed:
+
+```yaml
+permissions:
+  contents: write      # push refs/notes/wick
+  issues: write        # comment when the run made no commit
+
+steps:
+  - uses: actions/checkout@v4
+    with: { fetch-depth: 0 }
+
+  - id: base
+    run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  - uses: anthropics/claude-code-action@v1
+    # ... your agent step ...
+
+  - if: always()
+    uses: graemer-org/wick@v1
+    with:
+      mode: stamp
+      base-sha: ${{ steps.base.outputs.sha }}
+      comment-issue: ${{ github.event.issue.number || github.event.pull_request.number }}
+```
+
+If the agent committed, the commit is stamped and `refs/notes/wick` is pushed like any local commit. If it only answered (no commit), there's nothing to anchor a note to, so the run's cost is logged, and — when `comment-issue` is set — also posted as a one-line comment (`wick cost` computes it from the same transcripts):
+
+```
+🤖 wick: 82.4k tokens ≈ $0.41 across 1 session — no commit produced.
+```
+
 ## Cost badge
 
 The badge at the top of this README is the live, all-time cost of building Wick. `wick badge` renders it for any commit range:
@@ -116,6 +149,7 @@ wick status         health check: hooks, providers, last stamp
 wick report [range] per-commit table + by-author breakdown + total cost
                     (default range: merge-base…HEAD)
 wick report --json  machine-readable output
+wick cost           cost of the AI sessions touching this repo now (no commit needed)
 wick badge [range]  shields.io endpoint JSON for a cost badge
 wick reconcile --onto <sha> <range>
                     copy stamps onto a commit the hooks never saw

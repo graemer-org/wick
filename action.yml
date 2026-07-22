@@ -1,14 +1,26 @@
 name: "Wick PR cost report"
-description: "Posts the AI token cost of a Pull Request as a sticky PR comment, computed from wick git notes."
+description: "Wick AI cost in CI: post a PR's sticky cost comment (report), remap stamps after a squash/rebase merge (reconcile), or capture an agent run's cost (stamp)."
 inputs:
   github-token:
     description: "Token used to post the PR comment"
     required: false
     default: ${{ github.token }}
   mode:
-    description: "'report' posts the sticky PR cost comment; 'reconcile' remaps stamps after a squash/rebase merge (run on pull_request closed+merged)"
+    description: "'report' posts the sticky PR cost comment; 'reconcile' remaps stamps after a squash/rebase merge (run on pull_request closed+merged); 'stamp' captures a CI run's cost — stamps + pushes notes when the run made a commit, else logs the cost (and posts it as a comment if comment-issue is set)"
     required: false
     default: "report"
+  base-sha:
+    description: "'stamp' mode: HEAD before the agent ran. Required for stamp — it's how the run tells a fresh commit (stamp it) from a question-only run (comment the cost). Omitting it skips capture entirely (a blind stamp could double-count on re-runs)."
+    required: false
+    default: ""
+  comment-issue:
+    description: "'stamp' mode: issue/PR number to post the cost comment on when the run made no commit; omit to only log the cost"
+    required: false
+    default: ""
+  comment-only:
+    description: "'stamp' mode: set 'true' for workflows that never make a dev commit (PR review, issue triage) — always report the cost as a comment, never stamp. Skips HEAD detection, which is unreliable when the surrounding action moves HEAD (e.g. checks out the PR head)."
+    required: false
+    default: ""
 runs:
   using: "composite"
   steps:
@@ -73,6 +85,77 @@ runs:
         fi
 
         git push origin refs/notes/wick
+
+    - name: Stamp AI cost (or comment when no commit)
+      if: ${{ inputs.mode == 'stamp' }}
+      shell: bash
+      # Best-effort telemetry: a transient gh/cost hiccup must not redden the
+      # whole run (the stamp/push path itself already exits 0 by design).
+      continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        COMMENT_ISSUE: ${{ inputs.comment-issue }}
+        COMMENT_ONLY: ${{ inputs.comment-only }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        WICK="node ${{ github.action_path }}/dist/cli.js"
+
+        # Report this run's cost (from the runner's transcripts) as a comment.
+        # Reuses `wick cost`'s rendered line — the single source of truth for the
+        # token/cost formatting — rather than re-deriving it here.
+        post_cost_comment() {
+          COST_LINE=$($WICK cost)
+          echo "$COST_LINE"
+          if [ -z "$COMMENT_ISSUE" ]; then
+            echo "no comment-issue provided — cost logged only"
+          elif [[ "$COST_LINE" == "wick: 0 tokens "* ]]; then
+            # Nothing worth a comment: 0 tokens — the agent was skipped, errored
+            # immediately, or its transcript wasn't flushed (covers the 0-session
+            # case too). Logging the line above is enough.
+            echo "no usage found — skipping comment"
+          else
+            gh issue comment "$COMMENT_ISSUE" --repo "$REPO" \
+              --body "🤖 ${COST_LINE} — no commit produced."
+          fi
+        }
+
+        # Review/triage never make a dev commit, so don't try to detect one:
+        # the surrounding claude-code-action moves HEAD (it checks out the PR
+        # head), which would false-trigger the "commit landed" branch. Always
+        # comment the cost instead.
+        if [ "$COMMENT_ONLY" = "true" ]; then
+          post_cost_comment
+          exit 0
+        fi
+
+        # base-sha is how we tell a fresh commit from a question-only run.
+        # Without it we can't decide, and a blind stamp would double-count the
+        # same tokens onto HEAD on a re-run — so skip rather than guess.
+        if [ -z "$BASE_SHA" ]; then
+          echo "wick: stamp mode needs base-sha to detect whether the run committed — skipping capture"
+          exit 0
+        fi
+
+        # git notes needs a committer identity; runners have none.
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        HEAD_SHA=$(git rev-parse HEAD)
+
+        if [ "$HEAD_SHA" = "$BASE_SHA" ]; then
+          # No commit this run — nothing to anchor a stamp to, and stamping the
+          # pre-existing HEAD would pollute a commit reported in its own PR range.
+          post_cost_comment
+          exit 0
+        fi
+
+        # A commit landed this run — stamp it from the runner's Claude Code
+        # transcripts (delta vs the empty CI state = the whole run) and push the
+        # notes ref via the safe fetch→merge→force-with-lease path (never a bare
+        # push). Both calls exit 0 by design; a missing transcript is a no-op.
+        $WICK hook post-commit --commit "$HEAD_SHA"
+        $WICK hook pre-push --remote origin
 
     - name: Generate report
       if: ${{ inputs.mode == 'report' }}
