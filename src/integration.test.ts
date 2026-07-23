@@ -8,7 +8,8 @@ import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { postCommit, postRewrite, prePush } from "./hooks/index.js";
 import { readNote, syncNotesFromRemote, writeNote } from "./notes.js";
 import { accumulateNoCommit, buildReport, formatCostOutput, parseNoCommitComment, parsePrComment, renderCostLine, renderPrComment, summarizeCost, type Report } from "./report.js";
-import { clearProviders, collectUsage, registerProvider, type SessionUsage } from "./providers/types.js";
+import { collectUsage, type SessionUsage } from "./providers/types.js";
+import { createWick } from "./wick.js";
 import type { PricingTable } from "./pricing.js";
 import { TestFactory } from "./test-factory.js";
 
@@ -84,18 +85,16 @@ describe("installer (chain-safe)", () => {
 });
 
 describe("attribution end-to-end (mock provider = provider isolation)", () => {
-  beforeEach(() => clearProviders());
-  afterEach(() => clearProviders());
 
   it("stamps commits with deltas and reports them", async () => {
     // Arrange
     const repoPath = TestFactory.makeRepo();
     const sessionTotals = { output: 100 };
-    registerProvider(TestFactory.makeMockProvider("mock-provider", sessionTotals));
+    const wick = createWick([TestFactory.makeMockProvider("mock-provider", sessionTotals)]);
 
     // Act
     const firstCommit = TestFactory.makeCommit(repoPath, "first change");
-    await postCommit(repoPath, firstCommit);
+    await postCommit(wick, repoPath, firstCommit);
 
     // Assert
     const firstNote = readNote(firstCommit, repoPath);
@@ -110,7 +109,7 @@ describe("attribution end-to-end (mock provider = provider isolation)", () => {
     // Act + Assert — session keeps burning; next commit gets only the delta.
     sessionTotals.output = 260;
     const secondCommit = TestFactory.makeCommit(repoPath, "second change");
-    await postCommit(repoPath, secondCommit);
+    await postCommit(wick, repoPath, secondCommit);
     const secondNote = readNote(secondCommit, repoPath);
     expect(secondNote!.sessions[0].output).toBe(160);
 
@@ -125,20 +124,22 @@ describe("attribution end-to-end (mock provider = provider isolation)", () => {
   it("never throws into the hook path when a provider fails, but surfaces a warning", async () => {
     // Arrange — a provider that throws from every method.
     const repoPath = TestFactory.makeRepo();
-    registerProvider({
-      id: "broken",
-      async discoverSessions() {
-        throw new Error("boom");
+    const wick = createWick([
+      {
+        id: "broken",
+        async discoverSessions() {
+          throw new Error("boom");
+        },
+        async getUsage(): Promise<SessionUsage> {
+          throw new Error("boom");
+        },
       },
-      async getUsage(): Promise<SessionUsage> {
-        throw new Error("boom");
-      },
-    });
+    ]);
     const stampedCommit = TestFactory.makeCommit(repoPath, "change");
     const warn = vi.spyOn(console, "error").mockImplementation(() => {});
 
     // Act + Assert — the hook path swallows the failure and writes no note...
-    await expect(postCommit(repoPath, stampedCommit)).resolves.toBeUndefined();
+    await expect(postCommit(wick, repoPath, stampedCommit)).resolves.toBeUndefined();
     expect(readNote(stampedCommit, repoPath)).toBeNull();
     // ...but the failure is no longer invisible: onError logs it to stderr.
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("provider broken failed"));
@@ -277,20 +278,18 @@ describe("fixup commits (real autosquash rebases, notes.rewriteRef set)", () => 
 });
 
 describe("report ranges", () => {
-  beforeEach(() => clearProviders());
-  afterEach(() => clearProviders());
 
   it("only includes commits ahead of the merge-base on a branch", async () => {
     // Arrange — a stamped commit on main, then more spend on a feature branch.
     const repoPath = TestFactory.makeRepo();
     const sessionTotals = { output: 50 };
-    registerProvider(TestFactory.makeMockProvider("mock", sessionTotals));
+    const wick = createWick([TestFactory.makeMockProvider("mock", sessionTotals)]);
     const mainCommit = TestFactory.makeCommit(repoPath, "main work");
-    await postCommit(repoPath, mainCommit);
+    await postCommit(wick, repoPath, mainCommit);
     TestFactory.git(repoPath, "git", "checkout", "-q", "-b", "feature");
     sessionTotals.output = 80;
     const branchCommit = TestFactory.makeCommit(repoPath, "branch work");
-    await postCommit(repoPath, branchCommit);
+    await postCommit(wick, repoPath, branchCommit);
 
     // Act — default range: merge-base(main, HEAD)..HEAD
     const report = buildReport(repoPath);
@@ -305,15 +304,15 @@ describe("report ranges", () => {
     // Arrange — three stamped commits from two authors.
     const repoPath = TestFactory.makeRepo();
     const sessionTotals = { output: 100 };
-    registerProvider(TestFactory.makeMockProvider("mock", sessionTotals));
+    const wick = createWick([TestFactory.makeMockProvider("mock", sessionTotals)]);
     const aliceCommit = TestFactory.makeCommit(repoPath, "alice work", { name: "Alice", email: "alice@example.com" });
-    await postCommit(repoPath, aliceCommit);
+    await postCommit(wick, repoPath, aliceCommit);
     sessionTotals.output = 150;
     const bobCommit = TestFactory.makeCommit(repoPath, "bob work", { name: "Bob", email: "bob@example.com" });
-    await postCommit(repoPath, bobCommit);
+    await postCommit(wick, repoPath, bobCommit);
     sessionTotals.output = 250;
     const moreAliceCommit = TestFactory.makeCommit(repoPath, "more alice", { name: "Alice", email: "alice@example.com" });
-    await postCommit(repoPath, moreAliceCommit);
+    await postCommit(wick, repoPath, moreAliceCommit);
 
     // Act
     const report = buildReport(repoPath, "HEAD~3..HEAD");
@@ -336,12 +335,12 @@ describe("report ranges", () => {
     // Arrange — same person under two emails, unified by a .mailmap.
     const repoPath = TestFactory.makeRepo();
     const sessionTotals = { output: 10 };
-    registerProvider(TestFactory.makeMockProvider("mock", sessionTotals));
+    const wick = createWick([TestFactory.makeMockProvider("mock", sessionTotals)]);
     const laptopCommit = TestFactory.makeCommit(repoPath, "laptop", { name: "Alice", email: "alice@work.example" });
-    await postCommit(repoPath, laptopCommit);
+    await postCommit(wick, repoPath, laptopCommit);
     sessionTotals.output = 30;
     const webCommit = TestFactory.makeCommit(repoPath, "web ui", { name: "Alice", email: "12345+alice@users.noreply.github.com" });
-    await postCommit(repoPath, webCommit);
+    await postCommit(wick, repoPath, webCommit);
     writeFileSync(
       path.join(repoPath, ".mailmap"),
       "Alice <12345+alice@users.noreply.github.com> <alice@work.example>\n",
@@ -360,9 +359,9 @@ describe("report ranges", () => {
     // Arrange
     const repoPath = TestFactory.makeRepo();
     const sessionTotals = { output: 10 };
-    registerProvider(TestFactory.makeMockProvider("mock", sessionTotals));
+    const wick = createWick([TestFactory.makeMockProvider("mock", sessionTotals)]);
     const onlyCommit = TestFactory.makeCommit(repoPath, "x");
-    await postCommit(repoPath, onlyCommit);
+    await postCommit(wick, repoPath, onlyCommit);
 
     // Act
     const report = buildReport(repoPath);
@@ -744,8 +743,6 @@ describe("corrupt transcript resilience", () => {
 });
 
 describe("multi-provider end-to-end (claude-code + copilot-cli on one repo)", () => {
-  beforeEach(() => clearProviders());
-  afterEach(() => clearProviders());
 
   it("stamps one commit with sessions from both real providers and reports the sum", async () => {
     // Arrange — one repo, plus real on-disk fixtures for BOTH providers:
@@ -776,12 +773,14 @@ describe("multi-provider end-to-end (claude-code + copilot-cli on one repo)", ()
       messageOutputs: [],
     });
 
-    registerProvider(createClaudeCodeProvider({ claudeDir }));
-    registerProvider(createCopilotCliProvider({ copilotDir }));
+    const wick = createWick([
+      createClaudeCodeProvider({ claudeDir }),
+      createCopilotCliProvider({ copilotDir }),
+    ]);
 
     // Act — a single commit gets stamped, then reported.
     const stampedCommit = TestFactory.makeCommit(repoPath, "work with two assistants");
-    await postCommit(repoPath, stampedCommit);
+    await postCommit(wick, repoPath, stampedCommit);
     const note = readNote(stampedCommit, repoPath);
     const report = buildReport(repoPath, "HEAD~1..HEAD");
 
@@ -874,19 +873,17 @@ describe("syncNotesFromRemote (auto-fetch on report)", () => {
 });
 
 describe("CI capture (issue #33) — stamp + push with hooks never installed", () => {
-  beforeEach(() => clearProviders());
-  afterEach(() => clearProviders());
 
   it("stamps a commit directly (no installed hook), as the CI stamp step does", async () => {
     // Arrange — a fresh repo where `wick install` was never run (prepare.mjs
     // skips hook install under CI) and a session that burned tokens.
     const repoPath = TestFactory.makeRepo();
     expect(existsSync(path.join(repoPath, ".git", "hooks", "post-commit"))).toBe(false);
-    registerProvider(TestFactory.makeMockProvider("mock-provider", { output: 500 }));
+    const wick = createWick([TestFactory.makeMockProvider("mock-provider", { output: 500 })]);
     const ciCommit = TestFactory.makeCommit(repoPath, "agent change made in CI");
 
     // Act — the action's stamp step calls this directly, no installed hook.
-    await postCommit(repoPath, ciCommit);
+    await postCommit(wick, repoPath, ciCommit);
 
     // Assert — the CI commit carries the run's usage.
     const note = readNote(ciCommit, repoPath);
@@ -897,9 +894,9 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
   it("pushes the stamped notes ref to the remote via the pre-push path", async () => {
     // Arrange — a stamped commit and a bare remote to push to.
     const repoPath = TestFactory.makeRepo();
-    registerProvider(TestFactory.makeMockProvider("mock-provider", { output: 42 }));
+    const wick = createWick([TestFactory.makeMockProvider("mock-provider", { output: 42 })]);
     const stampedCommit = TestFactory.makeCommit(repoPath, "stamped change");
-    await postCommit(repoPath, stampedCommit);
+    await postCommit(wick, repoPath, stampedCommit);
     const remotePath = TestFactory.addBareRemote(repoPath);
 
     // Act — the stamp step's `wick hook pre-push --remote origin`.
@@ -917,9 +914,9 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     // non-fast-forward and, under `set -euo pipefail`, discard the stamp.
     const repoPath = TestFactory.makeRepo();
     const localTotals = { output: 10 };
-    registerProvider(TestFactory.makeMockProvider("mock-provider", localTotals));
+    const wick = createWick([TestFactory.makeMockProvider("mock-provider", localTotals)]);
     const localCommit = TestFactory.makeCommit(repoPath, "local work");
-    await postCommit(repoPath, localCommit);
+    await postCommit(wick, repoPath, localCommit);
     const remotePath = TestFactory.addBareRemote(repoPath);
     await prePush(repoPath, "origin"); // remote notes = { localCommit }
 
@@ -937,7 +934,7 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     // repoPath, unaware, advances its own notes ref → local and remote diverge.
     localTotals.output = 25;
     const secondLocalCommit = TestFactory.makeCommit(repoPath, "more local work");
-    await postCommit(repoPath, secondLocalCommit);
+    await postCommit(wick, repoPath, secondLocalCommit);
 
     // Act — the reconcile job's safe push path (fetch → per-commit merge →
     // force-with-lease), reached via `wick hook pre-push --remote origin`.
@@ -953,14 +950,14 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     // Arrange — a fresh repo (no stamp, no hooks) with a burning session and a
     // pricing table that prices the mock model.
     const repoPath = TestFactory.makeRepo();
-    registerProvider(TestFactory.makeMockProvider("mock-provider", { output: 1_000_000 }));
+    const wick = createWick([TestFactory.makeMockProvider("mock-provider", { output: 1_000_000 })]);
     const pricing: PricingTable = {
       "mock-provider": [{ match: "mock-model-x", input: 0, cacheRead: 0, cacheWrite: 0, output: 3 }],
     };
     const head = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
 
     // Act — the exact read-only path `wick cost` runs.
-    const { usage } = await collectUsage(repoPath, {});
+    const { usage } = await collectUsage(wick.providers, repoPath, {});
     const summary = summarizeCost(usage, pricing);
 
     // Assert — cost/tokens computed, and nothing was mutated.

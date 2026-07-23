@@ -51,23 +51,6 @@ export interface UsageProvider {
   getUsage(session: SessionRef, opts?: GetUsageOptions): Promise<SessionUsage>;
 }
 
-const registry: UsageProvider[] = [];
-
-export function registerProvider(provider: UsageProvider): void {
-  if (!registry.some((p) => p.id === provider.id)) {
-    registry.push(provider);
-  }
-}
-
-export function getProviders(): readonly UsageProvider[] {
-  return registry;
-}
-
-/** Test helper: reset the registry. */
-export function clearProviders(): void {
-  registry.length = 0;
-}
-
 export interface CollectOptions {
   /** Passed to each provider's getUsage to skip unchanged transcripts (stamp path). */
   since?: string;
@@ -87,17 +70,20 @@ export interface CollectResult {
 }
 
 /**
- * Collect current cumulative usage for all sessions of all registered
- * providers that touched this repo. A provider that fails never throws into
- * the hook path — its error is swallowed (optionally reported via onError).
+ * Collect current cumulative usage for all sessions of the given providers that
+ * touched this repo. Providers are passed in explicitly (no process-global
+ * registry) so one process can serve several repos/tenants concurrently. A
+ * provider that fails never throws into the hook path — its error is swallowed
+ * (optionally reported via onError).
  */
 export async function collectUsage(
+  providers: readonly UsageProvider[],
   repoRoot: string,
   opts: CollectOptions = {},
 ): Promise<CollectResult> {
   const usage: SessionUsage[] = [];
   const discovered: SessionRef[] = [];
-  for (const provider of getProviders()) {
+  for (const provider of providers) {
     try {
       const refs = await provider.discoverSessions(repoRoot);
       for (const ref of refs) {
