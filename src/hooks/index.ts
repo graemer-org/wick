@@ -22,12 +22,17 @@ export async function postCommit(cwd: string, commit?: string): Promise<void> {
     // read carries an mtime past `stampTs`, so it is re-read next commit and no
     // delta is lost (see GetUsageOptions.since).
     const stampTs = new Date().toISOString();
-    // Deltas are computed against CUMULATIVE session totals — do not pass a
-    // time window here, or windowed totals get compared against cumulative
-    // baselines and every delta collapses to zero. `since` only lets providers
-    // skip UNCHANGED transcripts (zero delta), never bounds the totals.
+    // Deltas are computed against CUMULATIVE session totals; `since` only lets
+    // providers skip UNCHANGED transcripts (zero delta), it never bounds the
+    // totals. A provider that throws here must not silently lose a PR's cost —
+    // surface it as a stderr warning (the hook still exits 0 via the CLI wrapper).
     const { usage, discovered } = await collectUsage(root, {
       since: state.lastStampTs ?? undefined,
+      onError: (providerId, err) =>
+        console.error(
+          `wick: warning: provider ${providerId} failed while collecting usage: ` +
+            `${err instanceof Error ? err.message : err}`,
+        ),
     });
     const { stamps, newState } = computeDelta(usage, state, stampTs, discovered);
     if (stamps.length > 0) {

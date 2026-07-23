@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import * as path from "node:path";
@@ -122,7 +122,7 @@ describe("attribution end-to-end (mock provider = provider isolation)", () => {
     expect(report.unknownModels).toContain("mock-provider/mock-model-x");
   });
 
-  it("never throws into the hook path when a provider fails", async () => {
+  it("never throws into the hook path when a provider fails, but surfaces a warning", async () => {
     // Arrange — a provider that throws from every method.
     const repoPath = TestFactory.makeRepo();
     registerProvider({
@@ -135,10 +135,15 @@ describe("attribution end-to-end (mock provider = provider isolation)", () => {
       },
     });
     const stampedCommit = TestFactory.makeCommit(repoPath, "change");
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    // Act + Assert — the hook path swallows the failure and writes no note.
+    // Act + Assert — the hook path swallows the failure and writes no note...
     await expect(postCommit(repoPath, stampedCommit)).resolves.toBeUndefined();
     expect(readNote(stampedCommit, repoPath)).toBeNull();
+    // ...but the failure is no longer invisible: onError logs it to stderr.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("provider broken failed"));
+
+    warn.mockRestore();
   });
 });
 

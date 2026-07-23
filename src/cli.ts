@@ -75,13 +75,22 @@ program
     }
     const state = await loadState(root);
     console.log(`last stamp: ${state.lastStampTs ?? "never"}`);
+    // Route discovery through the SAME collectUsage the stamp path uses, so
+    // status can't drift from what stamping actually sees.
+    const errored = new Set<string>();
+    const { discovered } = await collectUsage(root, {
+      onError: (providerId) => errored.add(providerId),
+    });
+    const sessionCounts = new Map<string, number>();
+    for (const ref of discovered) {
+      sessionCounts.set(ref.provider, (sessionCounts.get(ref.provider) ?? 0) + 1);
+    }
     for (const provider of getProviders()) {
-      try {
-        const refs = await provider.discoverSessions(root);
-        console.log(`provider ${provider.id}: ${refs.length} session(s) found`);
-      } catch {
-        console.log(`provider ${provider.id}: error while discovering sessions`);
-      }
+      console.log(
+        errored.has(provider.id)
+          ? `provider ${provider.id}: error while collecting usage`
+          : `provider ${provider.id}: ${sessionCounts.get(provider.id) ?? 0} session(s) found`,
+      );
     }
     const noteCount = tryGit(
       ["notes", `--ref=${NOTES_REF}`, "list"],
