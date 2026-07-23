@@ -360,6 +360,45 @@ describe("report ranges", () => {
   });
 });
 
+describe("mixed known/unknown pricing stays reconcilable", () => {
+  it("surfaces a commit's known-model cost as a lower bound instead of nulling the row", () => {
+    // Arrange — one commit whose note mixes a priced model (Opus 4.8) and an
+    // unpriced one. Nulling the whole row would bake the known partial into the
+    // footer total while showing n/a in the row, so the visible rows would no
+    // longer sum to the printed total.
+    const repoPath = TestFactory.makeRepo();
+    const mixedCommit = TestFactory.makeCommit(repoPath, "mixed-model work");
+    writeNote(
+      mixedCommit,
+      TestFactory.makeNote([
+        TestFactory.makeSession({
+          id: "known",
+          provider: "claude-code",
+          model: "claude-opus-4-8",
+          input: 1_000_000,
+        }),
+        TestFactory.makeSession({
+          id: "unknown",
+          provider: "claude-code",
+          model: "definitely-not-a-real-model",
+          output: 2_000_000,
+        }),
+      ]),
+      repoPath,
+    );
+
+    // Act
+    const report = buildReport(repoPath, "HEAD~1..HEAD");
+
+    // Assert — the row shows the known partial ($5 = 1M input × Opus $5/1M), not
+    // null, and equals the footer total; the unknown model is surfaced instead.
+    const row = report.commits.find((commitReport) => commitReport.commit === mixedCommit)!;
+    expect(row.costUsd).toBeCloseTo(5);
+    expect(report.totals.costUsd).toBeCloseTo(5);
+    expect(report.unknownModels).toContain("claude-code/definitely-not-a-real-model");
+  });
+});
+
 describe("squash-merge reconciliation", () => {
   it("consolidates branch stamps onto a squash commit, idempotently", async () => {
     // Arrange — a stamped feature branch squash-merged without post-rewrite.
@@ -592,6 +631,45 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     // Assert — refs/notes/wick exists on the remote and carries the stamp.
     expect(TestFactory.git(remotePath, "git", "rev-parse", "refs/notes/wick")).not.toBe("");
     expect(readNote(stampedCommit, remotePath)!.sessions[0].output).toBe(42);
+  });
+
+  it("merges a concurrently-advanced remote notes ref instead of losing the local stamp", async () => {
+    // Arrange — a stamped commit pushed to a bare remote (the state the
+    // reconcile job reaches after writing its remapped stamp). This is the path
+    // the CI reconcile job must use: a bare `git push` here would be rejected
+    // non-fast-forward and, under `set -euo pipefail`, discard the stamp.
+    const repoPath = TestFactory.makeRepo();
+    const localTotals = { output: 10 };
+    registerProvider(TestFactory.makeMockProvider("mock-provider", localTotals));
+    const localCommit = TestFactory.makeCommit(repoPath, "local work");
+    await postCommit(repoPath, localCommit);
+    const remotePath = TestFactory.addBareRemote(repoPath);
+    await prePush(repoPath, "origin"); // remote notes = { localCommit }
+
+    // A concurrent CI job (separate clone) stamps a different commit and pushes,
+    // advancing the remote's refs/notes/wick out from under repoPath.
+    const concurrentPath = TestFactory.cloneRepo(remotePath);
+    const concurrentCommit = TestFactory.makeCommit(concurrentPath, "concurrent work");
+    writeNote(
+      concurrentCommit,
+      TestFactory.makeSessionNote({ provider: "mock-provider", output: 99 }),
+      concurrentPath,
+    );
+    await prePush(concurrentPath, "origin"); // remote += { concurrentCommit }
+
+    // repoPath, unaware, advances its own notes ref → local and remote diverge.
+    localTotals.output = 25;
+    const secondLocalCommit = TestFactory.makeCommit(repoPath, "more local work");
+    await postCommit(repoPath, secondLocalCommit);
+
+    // Act — the reconcile job's safe push path (fetch → per-commit merge →
+    // force-with-lease), reached via `wick hook pre-push --remote origin`.
+    await prePush(repoPath, "origin");
+
+    // Assert — every stamp survives on the remote; nothing was clobbered.
+    expect(readNote(localCommit, remotePath)!.sessions[0].output).toBe(10);
+    expect(readNote(concurrentCommit, remotePath)!.sessions[0].output).toBe(99);
+    expect(readNote(secondLocalCommit, remotePath)!.sessions[0].output).toBe(15);
   });
 
   it("wick cost totals the current run without writing a note or state", async () => {
