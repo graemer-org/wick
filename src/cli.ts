@@ -193,6 +193,32 @@ program
   });
 
 program
+  .command("reconcile-merge")
+  .description(
+    "detect a merged PR's shape (squash / rebase / merge commit) and remap its stamps onto the merged commit(s) — CI reconcile job, run on pull_request closed+merged",
+  )
+  .requiredOption("--merge-sha <sha>", "the PR's merge_commit_sha")
+  .requiredOption("--base-ref <ref>", "the base branch tip, e.g. origin/main")
+  .option("--pr-head <ref>", "ref pointing at the PR head", "refs/wick/pr-head")
+  .option("--remote <remote>", "push the remapped notes to this remote when a stamp changed")
+  .action(async (opts: { mergeSha: string; baseRef: string; prHead: string; remote?: string }) => {
+    const { reconcileMerge } = await import("./reconcile.js");
+    const cwd = process.cwd();
+    const outcome = reconcileMerge(cwd, {
+      baseRef: opts.baseRef,
+      prHead: opts.prHead,
+      mergeSha: opts.mergeSha,
+    });
+    console.log(`wick: ${outcome.note}`);
+    // Push only when a stamp actually moved, via the safe fetch→merge→
+    // force-with-lease path (never a bare push — a concurrent stamp job
+    // advancing refs/notes/wick would non-fast-forward-reject it).
+    if (outcome.wrote && opts.remote) {
+      await prePush(cwd, opts.remote);
+    }
+  });
+
+program
   .command("hook")
   .description("internal entry point called by the installed git hooks")
   .argument("<event>", "post-commit | post-rewrite | post-merge | pre-push")

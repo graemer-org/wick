@@ -176,11 +176,12 @@ export function syncNotesFromRemote(
  * copied from source F" apart from "F already merged" and double-counts F
  * when notes.rewriteMode=overwrite.
  */
-export function remapNotes(oldCommits: string[], newCommit: string, cwd: string): void {
+/** Returns true when a note was actually (re)written onto `newCommit`. */
+export function remapNotes(oldCommits: string[], newCommit: string, cwd: string): boolean {
   const oldNotes = oldCommits
     .map((c) => readNote(c, cwd))
     .filter((n): n is NoteData => n !== null);
-  if (oldNotes.length === 0) return;
+  if (oldNotes.length === 0) return false;
 
   // A pre-existing target note identical to any source is git's own
   // rewriteRef copy (rewriteMode=overwrite copies one source verbatim;
@@ -199,6 +200,7 @@ export function remapNotes(oldCommits: string[], newCommit: string, cwd: string)
     base ?? { v: 1 as const, sessions: [] },
   );
   const current = readNote(newCommit, cwd);
-  if (current && JSON.stringify(current) === JSON.stringify(merged)) return;
+  if (current && JSON.stringify(current) === JSON.stringify(merged)) return false;
   writeNote(newCommit, merged, cwd);
+  return true;
 }
