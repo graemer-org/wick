@@ -7,7 +7,6 @@ import type {
   ModelUsage,
   SessionRef,
   SessionUsage,
-  TimeWindow,
   UsageProvider,
 } from "../types.js";
 
@@ -67,7 +66,7 @@ interface ParsedEvents {
   lastTs: string | null;
 }
 
-function parseEvents(content: string, window?: TimeWindow): ParsedEvents {
+function parseEvents(content: string): ParsedEvents {
   const res: ParsedEvents = {
     sessionStart: null,
     shutdown: null,
@@ -85,8 +84,6 @@ function parseEvents(content: string, window?: TimeWindow): ParsedEvents {
     }
     const ts = typeof e?.timestamp === "string" ? e.timestamp : null;
     if (ts) {
-      if (window?.start && ts < window.start) continue;
-      if (window?.end && ts > window.end) continue;
       if (!res.firstTs || ts < res.firstTs) res.firstTs = ts;
       if (!res.lastTs || ts > res.lastTs) res.lastTs = ts;
     }
@@ -197,7 +194,7 @@ export function createCopilotCliProvider(
   return {
     id: PROVIDER_ID,
 
-    async discoverSessions(repoRoot: string, _window: TimeWindow): Promise<SessionRef[]> {
+    async discoverSessions(repoRoot: string): Promise<SessionRef[]> {
       let entries: string[];
       try {
         entries = await fs.readdir(stateDir);
@@ -220,17 +217,17 @@ export function createCopilotCliProvider(
       return refs;
     },
 
-    async getUsage(session: SessionRef, opts?: GetUsageOptions): Promise<SessionUsage> {
+    async getUsage(session: SessionRef, _opts?: GetUsageOptions): Promise<SessionUsage> {
       // No mtime-skip here: a live session's usage can grow in the central
       // session-store.db without touching events.jsonl, so the transcript's
-      // mtime is not a reliable "unchanged" signal. `opts.since` is ignored.
+      // mtime is not a reliable "unchanged" signal. `_opts.since` is ignored.
       let content = "";
       try {
         content = await fs.readFile(path.join(session.path, "events.jsonl"), "utf8");
       } catch {
         // missing/unreadable events — DB may still know the session
       }
-      const parsed = parseEvents(content, opts?.window);
+      const parsed = parseEvents(content);
 
       let byModel: Map<string, RawCounts> | null = parsed.shutdown;
       if (!byModel) byModel = queryStoreDb(storeDb, session.id);

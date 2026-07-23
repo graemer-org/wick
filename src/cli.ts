@@ -77,7 +77,7 @@ program
     console.log(`last stamp: ${state.lastStampTs ?? "never"}`);
     for (const provider of getProviders()) {
       try {
-        const refs = await provider.discoverSessions(root, {});
+        const refs = await provider.discoverSessions(root);
         console.log(`provider ${provider.id}: ${refs.length} session(s) found`);
       } catch {
         console.log(`provider ${provider.id}: error while discovering sessions`);

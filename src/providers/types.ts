@@ -3,13 +3,6 @@
  * only these shapes — no provider-specific imports are allowed elsewhere.
  */
 
-export interface TimeWindow {
-  /** ISO timestamp, inclusive lower bound. Omit for "since forever". */
-  start?: string;
-  /** ISO timestamp, inclusive upper bound. Omit for "until now". */
-  end?: string;
-}
-
 export interface SessionRef {
   /** Stable session identifier (e.g. the transcript's session UUID). */
   id: string;
@@ -36,8 +29,6 @@ export interface SessionUsage {
 }
 
 export interface GetUsageOptions {
-  /** Optional time window (legacy; the delta path never passes one). */
-  window?: TimeWindow;
   /**
    * ISO mtime cutoff. A provider MAY skip re-reading a session whose transcript
    * has not changed since this instant and return empty usage instead — an
@@ -54,8 +45,8 @@ export interface GetUsageOptions {
 
 export interface UsageProvider {
   readonly id: string;
-  /** Sessions that touched this repo within the given time window. */
-  discoverSessions(repoRoot: string, window: TimeWindow): Promise<SessionRef[]>;
+  /** Sessions whose transcripts touched this repo. */
+  discoverSessions(repoRoot: string): Promise<SessionRef[]>;
   /** Deduped, per-model token usage for one session. */
   getUsage(session: SessionRef, opts?: GetUsageOptions): Promise<SessionUsage>;
 }
@@ -78,7 +69,6 @@ export function clearProviders(): void {
 }
 
 export interface CollectOptions {
-  window?: TimeWindow;
   /** Passed to each provider's getUsage to skip unchanged transcripts (stamp path). */
   since?: string;
   onError?: (providerId: string, err: unknown) => void;
@@ -109,11 +99,11 @@ export async function collectUsage(
   const discovered: SessionRef[] = [];
   for (const provider of getProviders()) {
     try {
-      const refs = await provider.discoverSessions(repoRoot, opts.window ?? {});
+      const refs = await provider.discoverSessions(repoRoot);
       for (const ref of refs) {
         discovered.push(ref);
         try {
-          usage.push(await provider.getUsage(ref, { window: opts.window, since: opts.since }));
+          usage.push(await provider.getUsage(ref, { since: opts.since }));
         } catch (err) {
           opts.onError?.(provider.id, err);
         }

@@ -6,7 +6,6 @@ import type {
   ModelUsage,
   SessionRef,
   SessionUsage,
-  TimeWindow,
   UsageProvider,
 } from "../types.js";
 
@@ -127,13 +126,6 @@ async function newestSessionMtimeMs(session: SessionRef): Promise<number | null>
   return newest;
 }
 
-function inWindow(ts: string | null, window?: TimeWindow): boolean {
-  if (!window || !ts) return true;
-  if (window.start && ts < window.start) return false;
-  if (window.end && ts > window.end) return false;
-  return true;
-}
-
 export interface ClaudeCodeProviderOptions {
   /** Override ~/.claude for tests. */
   claudeDir?: string;
@@ -147,7 +139,7 @@ export function createClaudeCodeProvider(
   return {
     id: PROVIDER_ID,
 
-    async discoverSessions(repoRoot: string, _window: TimeWindow): Promise<SessionRef[]> {
+    async discoverSessions(repoRoot: string): Promise<SessionRef[]> {
       const projectDir = path.join(
         claudeDir,
         "projects",
@@ -193,7 +185,6 @@ export function createClaudeCodeProvider(
         }
       }
 
-      const window = opts?.window;
       const byMessageId = new Map<string, MessageUsage>();
       await parseTranscriptFile(session.path, byMessageId);
 
@@ -217,7 +208,6 @@ export function createClaudeCodeProvider(
       let firstTs: string | null = null;
       let lastTs: string | null = null;
       for (const u of byMessageId.values()) {
-        if (!inWindow(u.ts, window)) continue;
         const agg = perModel.get(u.model) ?? {
           model: u.model,
           input: 0,
