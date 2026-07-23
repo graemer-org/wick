@@ -157,7 +157,8 @@ program
     }
     // Read-only: collect current cumulative usage and price it. No delta, no
     // note write, no state mutation — this must not disturb the stamp baselines.
-    const summary = summarizeCost(await collectUsage(root, {}), loadPricing(root));
+    const { usage } = await collectUsage(root, {});
+    const summary = summarizeCost(usage, loadPricing(root));
     const out = formatCostOutput(summary, opts.json === true);
     console.log(out.stdout);
     if (out.stderr) console.error(out.stderr);

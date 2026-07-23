@@ -127,6 +127,123 @@ describe("computeDelta", () => {
     expect(recoveredStamp.stamps).toHaveLength(1);
     expect(recoveredStamp.stamps[0].output).toBe(20);
   });
+
+  it("prunes a vanished session's baseline only after two consecutive misses", () => {
+    // Arrange — two claude-code sessions get stamped.
+    const onlySession1 = [{ id: "session-1", provider: "claude-code", path: "/dev/null" }];
+    const first = computeDelta(
+      [
+        TestFactory.makeSessionUsage("session-1", "model-1", { output: 100 }),
+        TestFactory.makeSessionUsage("session-2", "model-1", { output: 200 }),
+      ],
+      emptyState(),
+    );
+
+    // Act — session-2's transcript is gone; only session-1 is discovered, twice.
+    const graceRun = computeDelta(
+      [TestFactory.makeSessionUsage("session-1", "model-1", { output: 150 })],
+      first.newState,
+      undefined,
+      onlySession1,
+    );
+    const pruneRun = computeDelta(
+      [TestFactory.makeSessionUsage("session-1", "model-1", { output: 160 })],
+      graceRun.newState,
+      undefined,
+      onlySession1,
+    );
+
+    // Assert — the first miss is a grace run (baseline kept); the second prunes,
+    // so state.json can't grow forever but a one-run blip can't drop a baseline.
+    expect(Object.keys(graceRun.newState.sessions).sort()).toEqual([
+      "claude-code:session-1",
+      "claude-code:session-2",
+    ]);
+    expect(graceRun.newState.pendingPrune).toEqual(["claude-code:session-2"]);
+    expect(Object.keys(pruneRun.newState.sessions)).toEqual(["claude-code:session-1"]);
+  });
+
+  it("resets the prune strike when a session reappears", () => {
+    // Arrange — a stamped session that then misses one run while its provider
+    // stays live (a sibling session keeps claude-code discoverable).
+    const first = computeDelta(
+      [TestFactory.makeSessionUsage("session-1", "model-1", { output: 100 })],
+      emptyState(),
+    );
+    const strike = computeDelta(
+      [],
+      first.newState,
+      undefined,
+      [{ id: "sibling", provider: "claude-code", path: "/dev/null" }],
+    );
+
+    // Act — session-1 is discovered again after its single miss.
+    const back = computeDelta(
+      [TestFactory.makeSessionUsage("session-1", "model-1", { output: 120 })],
+      strike.newState,
+      undefined,
+      [{ id: "session-1", provider: "claude-code", path: "/dev/null" }],
+    );
+
+    // Assert — the miss recorded a strike, then reappearing cleared it, so a
+    // later miss would count from zero rather than pruning immediately.
+    expect(strike.newState.pendingPrune).toEqual(["claude-code:session-1"]);
+    expect(strike.newState.sessions["claude-code:session-1"]).toBeDefined();
+    expect(back.newState.pendingPrune).toEqual([]);
+    expect(back.newState.sessions["claude-code:session-1"]).toBeDefined();
+  });
+
+  it("does not prune, nor double-count, when a provider returns no sessions", () => {
+    // Arrange
+    const first = computeDelta(
+      [TestFactory.makeSessionUsage("session-1", "model-1", { output: 100 })],
+      emptyState(),
+    );
+
+    // Act — discoverSessions momentarily returned nothing (e.g. dir unreadable),
+    // then recovered with the same session grown to 150.
+    const transient = computeDelta([], first.newState, undefined, []);
+    const recovered = computeDelta(
+      [TestFactory.makeSessionUsage("session-1", "model-1", { output: 150 })],
+      transient.newState,
+      undefined,
+      [{ id: "session-1", provider: "claude-code", path: "/dev/null" }],
+    );
+
+    // Assert — the baseline survived the transient failure, so recovery stamps
+    // only the 50-token delta, not the full 150.
+    expect(Object.keys(transient.newState.sessions)).toEqual(["claude-code:session-1"]);
+    expect(recovered.stamps).toHaveLength(1);
+    expect(recovered.stamps[0].output).toBe(50);
+  });
+
+  it("only prunes within providers that returned at least one session", () => {
+    // Arrange — one claude-code session and one copilot-cli session stamped.
+    const first = computeDelta(
+      [
+        TestFactory.makeSessionUsage("cc-1", "model-1", { output: 100 }),
+        {
+          sessionId: "cop-1",
+          provider: "copilot-cli",
+          perModel: [{ model: "m", input: 0, cacheRead: 0, cacheWrite: 0, output: 10 }],
+          firstTs: "",
+          lastTs: "",
+        },
+      ],
+      emptyState(),
+    );
+
+    // Act — only claude-code is discoverable across two runs (Copilot CLI
+    // absent), and its session cc-1 vanished.
+    const discovered = [{ id: "cc-other", provider: "claude-code", path: "/dev/null" }];
+    const graceRun = computeDelta([], first.newState, undefined, discovered);
+    const second = computeDelta([], graceRun.newState, undefined, discovered);
+
+    // Assert — cc-1 pruned (its provider was live, it disappeared for two runs);
+    // the copilot baseline is kept, since its provider returning nothing could
+    // be transient.
+    expect(Object.keys(second.newState.sessions)).toEqual(["copilot-cli:cop-1"]);
+  });
 });
 
 describe("mergeNotes", () => {

@@ -955,7 +955,8 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     const head = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
 
     // Act — the exact read-only path `wick cost` runs.
-    const summary = summarizeCost(await collectUsage(repoPath, {}), pricing);
+    const { usage } = await collectUsage(repoPath, {});
+    const summary = summarizeCost(usage, pricing);
 
     // Assert — cost/tokens computed, and nothing was mutated.
     expect(summary.totalTokens).toBe(1_000_007); // 1M output + 7 input

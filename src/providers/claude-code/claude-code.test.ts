@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { createClaudeCodeProvider, encodeProjectPath } from "./index.js";
@@ -122,6 +122,90 @@ describe("claude-code provider", () => {
     const usage = await provider.getUsage(sessionRef);
 
     // Assert
+    expect(usage.perModel[0].output).toBe(130);
+  });
+
+  it("skips reading a transcript unchanged since the `since` cutoff", async () => {
+    // Arrange — a transcript whose mtime predates the cutoff (nothing changed).
+    const repoRoot = "/fake/repo-skip";
+    const claudeDir = TestFactory.makeClaudeTranscript({
+      repoRoot,
+      sessionId: SESSION_ID,
+      lines: [TestFactory.claudeAssistantLine("msg_old", "claude-fable-5", { output: 500 })],
+    });
+    const transcriptPath = path.join(
+      claudeDir,
+      "projects",
+      encodeProjectPath(repoRoot),
+      `${SESSION_ID}.jsonl`,
+    );
+    const transcriptMtime = new Date("2026-07-01T00:00:00.000Z");
+    utimesSync(transcriptPath, transcriptMtime, transcriptMtime);
+    const provider = createClaudeCodeProvider({ claudeDir });
+    const [sessionRef] = await provider.discoverSessions(repoRoot, {});
+
+    // Act — stamp path passes a cutoff AFTER the transcript's mtime.
+    const usage = await provider.getUsage(sessionRef, { since: "2026-07-02T00:00:00.000Z" });
+
+    // Assert — skipped: empty usage stands in for "zero delta", not read.
+    expect(usage.perModel).toEqual([]);
+    expect(usage.sessionId).toBe(SESSION_ID);
+  });
+
+  it("re-reads a transcript modified after the `since` cutoff", async () => {
+    // Arrange — a transcript whose mtime is newer than the cutoff.
+    const repoRoot = "/fake/repo-fresh";
+    const claudeDir = TestFactory.makeClaudeTranscript({
+      repoRoot,
+      sessionId: SESSION_ID,
+      lines: [TestFactory.claudeAssistantLine("msg_new", "claude-fable-5", { output: 500 })],
+    });
+    const transcriptPath = path.join(
+      claudeDir,
+      "projects",
+      encodeProjectPath(repoRoot),
+      `${SESSION_ID}.jsonl`,
+    );
+    const transcriptMtime = new Date("2026-07-03T00:00:00.000Z");
+    utimesSync(transcriptPath, transcriptMtime, transcriptMtime);
+    const provider = createClaudeCodeProvider({ claudeDir });
+    const [sessionRef] = await provider.discoverSessions(repoRoot, {});
+
+    // Act — cutoff predates the transcript's mtime.
+    const usage = await provider.getUsage(sessionRef, { since: "2026-07-02T00:00:00.000Z" });
+
+    // Assert — parsed normally.
+    expect(usage.perModel[0].output).toBe(500);
+  });
+
+  it("does not skip when a subagent transcript is newer than the cutoff", async () => {
+    // Arrange — a stale main transcript but a subagent modified after the cutoff.
+    const repoRoot = "/fake/repo-subskip";
+    const claudeDir = TestFactory.makeClaudeTranscript({
+      repoRoot,
+      sessionId: SESSION_ID,
+      lines: [TestFactory.claudeAssistantLine("msg_main", "claude-fable-5", { output: 100 })],
+    });
+    const projectDir = path.join(claudeDir, "projects", encodeProjectPath(repoRoot));
+    const transcriptPath = path.join(projectDir, `${SESSION_ID}.jsonl`);
+    const stale = new Date("2026-07-01T00:00:00.000Z");
+    utimesSync(transcriptPath, stale, stale);
+    const subagentsDir = path.join(projectDir, SESSION_ID, "subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    const subagentPath = path.join(subagentsDir, "agent-fresh.jsonl");
+    writeFileSync(
+      subagentPath,
+      TestFactory.claudeAssistantLine("msg_sub", "claude-fable-5", { output: 30 }),
+    );
+    const fresh = new Date("2026-07-03T00:00:00.000Z");
+    utimesSync(subagentPath, fresh, fresh);
+    const provider = createClaudeCodeProvider({ claudeDir });
+    const [sessionRef] = await provider.discoverSessions(repoRoot, {});
+
+    // Act — cutoff sits between the two mtimes.
+    const usage = await provider.getUsage(sessionRef, { since: "2026-07-02T00:00:00.000Z" });
+
+    // Assert — the newer subagent forces a full read (main + subagent).
     expect(usage.perModel[0].output).toBe(130);
   });
 

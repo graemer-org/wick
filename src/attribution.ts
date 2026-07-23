@@ -1,4 +1,4 @@
-import type { ModelUsage, SessionUsage } from "./providers/types.js";
+import type { ModelUsage, SessionRef, SessionUsage } from "./providers/types.js";
 
 /**
  * Session → commit attribution.
@@ -32,10 +32,16 @@ export interface StampState {
   v: 1;
   lastStampTs: string | null;
   sessions: SessionBaselines;
+  /**
+   * Session keys that were absent from discovery on the PREVIOUS run — the
+   * first strike of the two-strike prune (see computeDelta). Optional so
+   * pre-existing state.json files load unchanged.
+   */
+  pendingPrune?: string[];
 }
 
 export function emptyState(): StampState {
-  return { v: 1, lastStampTs: null, sessions: {} };
+  return { v: 1, lastStampTs: null, sessions: {}, pendingPrune: [] };
 }
 
 function sessionKey(provider: string, sessionId: string): string {
@@ -50,11 +56,25 @@ export interface DeltaResult {
 /**
  * Compute the per-session, per-model token delta since the recorded baselines
  * and return the updated baselines. Pure function — the caller persists state.
+ *
+ * `discovered` (the sessions that still exist on disk this run) prunes stale
+ * baselines so state.json can't grow unbounded over a repo's life. Pruning is
+ * keyed on actual disappearance, never age: resurfacing a pruned session would
+ * re-stamp its full cumulative total against a zeroed baseline. Two guards keep
+ * a transient miss from triggering that double-count:
+ *   1. Scoped to providers that returned ≥1 session — a provider that returned
+ *      nothing may just be temporarily unreadable.
+ *   2. Two-strike: a baseline is dropped only after its session is absent on
+ *      two consecutive runs. Some providers' discovery reads file content
+ *      (copilot-cli matches gitRoot in each events.jsonl head) and can silently
+ *      drop one session on a transient read error while staying "live"; the
+ *      grace run absorbs that blip.
  */
 export function computeDelta(
   current: SessionUsage[],
   state: StampState,
   now: string = new Date().toISOString(),
+  discovered?: readonly SessionRef[],
 ): DeltaResult {
   const stamps: NoteSession[] = [];
   const newSessions: SessionBaselines = { ...state.sessions };
@@ -100,9 +120,32 @@ export function computeDelta(
     newSessions[key] = nextBaseline;
   }
 
+  let pendingPrune = state.pendingPrune ?? [];
+  if (discovered) {
+    const liveKeys = new Set<string>();
+    const liveProviders = new Set<string>();
+    for (const ref of discovered) {
+      liveKeys.add(sessionKey(ref.provider, ref.id));
+      liveProviders.add(ref.provider);
+    }
+    const priorlyAbsent = new Set(pendingPrune);
+    const nextPending: string[] = [];
+    for (const key of Object.keys(newSessions)) {
+      const providerId = key.slice(0, key.indexOf(":"));
+      const absent = liveProviders.has(providerId) && !liveKeys.has(key);
+      if (!absent) continue; // present (or its provider went silent) — no strike
+      if (priorlyAbsent.has(key)) {
+        delete newSessions[key]; // absent two runs running — prune for real
+      } else {
+        nextPending.push(key); // first strike — keep the baseline one more run
+      }
+    }
+    pendingPrune = nextPending;
+  }
+
   return {
     stamps,
-    newState: { v: 1, lastStampTs: now, sessions: newSessions },
+    newState: { v: 1, lastStampTs: now, sessions: newSessions, pendingPrune },
   };
 }
 
