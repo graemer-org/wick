@@ -57,38 +57,16 @@ runs:
         # PR head commits survive branch deletion via refs/pull/<n>/head.
         git fetch origin "+refs/pull/${PR_NUMBER}/head:refs/wick/pr-head"
         git fetch origin "$BASE_REF"
-        BASE=$(git merge-base "origin/${BASE_REF}" refs/wick/pr-head)
-
-        NPARENTS=$(git cat-file -p "$MERGE_SHA" | grep -c '^parent ' || true)
-        if [ "$NPARENTS" -gt 1 ]; then
-          echo "merge commit — stamps are already reachable, nothing to reconcile"
-          exit 0
-        fi
-
-        mapfile -t PR_SHAS < <(git rev-list --reverse "$BASE..refs/wick/pr-head")
-        mapfile -t MAIN_SHAS < <(git rev-list --reverse "$BASE..$MERGE_SHA")
-        echo "PR commits: ${#PR_SHAS[@]}, new commits on ${BASE_REF}: ${#MAIN_SHAS[@]}"
-
-        if [ "${#MAIN_SHAS[@]}" -eq 1 ]; then
-          # Squash merge: union of all PR stamps onto the squash commit.
-          $WICK reconcile --onto "$MERGE_SHA" "$BASE..refs/wick/pr-head"
-        elif [ "${#MAIN_SHAS[@]}" -eq "${#PR_SHAS[@]}" ]; then
-          # Rebase merge: 1:1 old→new mapping, same order.
-          PAIRS=""
-          for i in "${!PR_SHAS[@]}"; do
-            PAIRS="${PAIRS}${PR_SHAS[$i]} ${MAIN_SHAS[$i]}"$'\n'
-          done
-          $WICK hook post-rewrite --pairs "$PAIRS"
-        else
-          echo "unrecognized merge shape — skipping"
-          exit 0
-        fi
-
-        # Push the remapped notes via the safe fetch→merge→force-with-lease path
-        # (never a bare push). A concurrent stamp job advancing refs/notes/wick
-        # would non-fast-forward-reject a bare push and, under pipefail, discard
-        # the reconciled stamp with the runner.
-        $WICK hook pre-push --remote origin
+        # Shape detection (squash vs rebase vs merge commit) and the remap live
+        # in `reconcile-merge` where they're unit-tested — the base branch drifts
+        # under open PRs, and the old bash counted commits in a drift-polluted
+        # range, so it skipped every affected PR (#47). --remote pushes the
+        # remapped notes only when a stamp actually moved, via the safe path.
+        $WICK reconcile-merge \
+          --merge-sha "$MERGE_SHA" \
+          --base-ref "origin/${BASE_REF}" \
+          --pr-head refs/wick/pr-head \
+          --remote origin
 
     - name: Stamp AI cost (or comment when no commit)
       if: ${{ inputs.mode == 'stamp' }}

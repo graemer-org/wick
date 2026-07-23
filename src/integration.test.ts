@@ -454,6 +454,270 @@ describe("squash-merge reconciliation", () => {
   });
 });
 
+describe("merge-shape detection (drift-robust, #47)", () => {
+  /** Commit a brand-new file (disjoint diffs never conflict on squash/rebase). */
+  function commitFile(repoPath: string, name: string): string {
+    writeFileSync(path.join(repoPath, name), `${name}\n`);
+    TestFactory.git(repoPath, "git", "add", ".");
+    TestFactory.git(repoPath, "git", "commit", "-q", "-m", name);
+    return TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+  }
+
+  /** Overwrite a file with exact content and commit it (for line-offset tests). */
+  function commitContent(repoPath: string, name: string, content: string): string {
+    writeFileSync(path.join(repoPath, name), content);
+    TestFactory.git(repoPath, "git", "add", ".");
+    TestFactory.git(repoPath, "git", "commit", "-q", "-m", `edit ${name}`);
+    return TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+  }
+
+  it("detects a squash merge even when the base branch advanced independently", async () => {
+    // Arrange — the #47 scenario: a stamped feature branch, an UNRELATED commit
+    // lands on main while the PR is open, then the PR is squash-merged. The old
+    // count-based detector saw two commits in base..mergeSha (the drift + the
+    // squash) with PR_SHAS also 2, and mis-detected a rebase.
+    const { detectMergeShape, consolidateNotes } = await import("./reconcile.js");
+    const repoPath = TestFactory.makeRepo();
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "-b", "feature");
+    const firstFeatureCommit = commitFile(repoPath, "feat-a.txt");
+    writeNote(firstFeatureCommit, TestFactory.makeSessionNote({ input: 1, cacheRead: 10, output: 5 }), repoPath);
+    const secondFeatureCommit = commitFile(repoPath, "feat-b.txt");
+    writeNote(secondFeatureCommit, TestFactory.makeSessionNote({ input: 2, cacheRead: 20, output: 7 }), repoPath);
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "main");
+    commitFile(repoPath, "unrelated-drift.txt"); // main moves ahead independently
+    TestFactory.git(repoPath, "git", "merge", "--squash", "feature");
+    TestFactory.git(repoPath, "git", "commit", "-q", "-m", "feature (squashed)");
+    const squashCommit = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+
+    // Act
+    const shape = detectMergeShape(repoPath, {
+      baseRef: "main",
+      prHead: "feature",
+      mergeSha: squashCommit,
+    });
+
+    // Assert — recognized as a squash of exactly the two PR commits, and their
+    // stamps consolidate onto the squash commit.
+    expect(shape).toEqual({
+      kind: "squash",
+      onto: squashCommit,
+      sources: [firstFeatureCommit, secondFeatureCommit],
+    });
+    if (shape.kind !== "squash") throw new Error("expected squash");
+    expect(consolidateNotes(repoPath, shape.sources, shape.onto)).toBe("written");
+    expect(readNote(squashCommit, repoPath)!.sessions[0]).toMatchObject({ input: 3, cacheRead: 30, output: 12 });
+  });
+
+  it("detects a squash merge when the PR synced the base and the base then drifted again", async () => {
+    // Arrange — the PR merges main into itself (pushing the merge-base forward),
+    // THEN main gains one more unrelated commit before the squash. This yields
+    // base..mergeSha == base..prHead == 2, so the old count-based detector
+    // mis-classified it as a rebase and remapped the PR's stamp onto an
+    // unrelated main commit. (A single sync with no later drift left the count
+    // at 1 and detected squash fine — that variant never triggered the bug.)
+    const { detectMergeShape, consolidateNotes } = await import("./reconcile.js");
+    const repoPath = TestFactory.makeRepo();
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "-b", "feature");
+    const featureCommit = commitFile(repoPath, "feat-a.txt");
+    writeNote(featureCommit, TestFactory.makeSessionNote({ input: 4, cacheRead: 40, output: 9 }), repoPath);
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "main");
+    commitFile(repoPath, "drift-before-sync.txt");
+    TestFactory.git(repoPath, "git", "checkout", "-q", "feature");
+    TestFactory.git(repoPath, "git", "merge", "-q", "--no-edit", "main"); // PR pulls main in
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "main");
+    commitFile(repoPath, "drift-after-sync.txt"); // main drifts again post-sync
+    TestFactory.git(repoPath, "git", "merge", "--squash", "feature");
+    TestFactory.git(repoPath, "git", "commit", "-q", "-m", "feature (squashed)");
+    const squashCommit = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+
+    // Act
+    const shape = detectMergeShape(repoPath, {
+      baseRef: "main",
+      prHead: "feature",
+      mergeSha: squashCommit,
+    });
+
+    // Assert — squash (not a mis-detected rebase), and the stamp lands on the
+    // squash commit, not on a drift commit.
+    expect(shape.kind).toBe("squash");
+    if (shape.kind !== "squash") throw new Error("expected squash");
+    expect(shape.sources).toContain(featureCommit);
+    expect(consolidateNotes(repoPath, shape.sources, shape.onto)).toBe("written");
+    expect(readNote(squashCommit, repoPath)!.sessions[0]).toMatchObject({ input: 4, cacheRead: 40, output: 9 });
+  });
+
+  it("detects a rebase merge (1:1 replay) despite independent base drift", async () => {
+    // Arrange — feature replayed onto a main that gained an unrelated commit.
+    // Under the old logic base..mergeSha was 3 (drift + 2 replays) vs PR 2, so
+    // it fell through to "unrecognized" and dropped the PR's stamps entirely.
+    const { detectMergeShape } = await import("./reconcile.js");
+    const { remapNotes } = await import("./notes.js");
+    const repoPath = TestFactory.makeRepo();
+    const forkPoint = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "-b", "feature");
+    const firstFeatureCommit = commitFile(repoPath, "feat-a.txt");
+    writeNote(firstFeatureCommit, TestFactory.makeSessionNote({ input: 1, output: 5 }), repoPath);
+    const secondFeatureCommit = commitFile(repoPath, "feat-b.txt");
+    writeNote(secondFeatureCommit, TestFactory.makeSessionNote({ input: 2, output: 7 }), repoPath);
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "main");
+    commitFile(repoPath, "unrelated-drift.txt");
+    // Rebase merge = replay the PR commits onto the drifted main tip.
+    TestFactory.git(repoPath, "git", "cherry-pick", `${forkPoint}..feature`);
+    const replayedShas = TestFactory.git(repoPath, "git", "rev-list", "--first-parent", "--reverse", "-n", "2", "HEAD").split("\n");
+    const mergeSha = replayedShas[1];
+
+    // Act
+    const shape = detectMergeShape(repoPath, {
+      baseRef: "main",
+      prHead: "feature",
+      mergeSha,
+    });
+
+    // Assert — rebase with the correct 1:1 old→new pairing, and remapping
+    // carries each stamp onto its replayed commit.
+    expect(shape).toEqual({
+      kind: "rebase",
+      pairs: [
+        [firstFeatureCommit, replayedShas[0]],
+        [secondFeatureCommit, replayedShas[1]],
+      ],
+    });
+    if (shape.kind !== "rebase") throw new Error("expected rebase");
+    for (const [oldSha, newSha] of shape.pairs) remapNotes([oldSha], newSha, repoPath);
+    expect(readNote(replayedShas[0], repoPath)!.sessions[0]).toMatchObject({ input: 1, output: 5 });
+    expect(readNote(replayedShas[1], repoPath)!.sessions[0]).toMatchObject({ input: 2, output: 7 });
+  });
+
+  it("matches a rebased commit by patch-id even when base drift shifted its line numbers", async () => {
+    // Arrange — the base drift edits the SAME file the PR commit does, so the
+    // replayed commit's diff has different @@ line numbers than the original.
+    // This is the only case that distinguishes patch-id matching from a naive
+    // byte-identical diff comparison — an exact-diff detector would miss it.
+    const { detectMergeShape } = await import("./reconcile.js");
+    const repoPath = TestFactory.makeRepo();
+    commitContent(repoPath, "shared.txt", "L1\nL2\nL3\n");
+    const forkPoint = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "-b", "feature");
+    const featureCommit = commitContent(repoPath, "shared.txt", "L1\nL2\nL3\nFEAT\n"); // append at bottom
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "main");
+    commitContent(repoPath, "shared.txt", "TOP\nL1\nL2\nL3\n"); // prepend → shifts feature's line
+    TestFactory.git(repoPath, "git", "cherry-pick", `${forkPoint}..feature`);
+    const replayedCommit = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+
+    // Act
+    const shape = detectMergeShape(repoPath, {
+      baseRef: "main",
+      prHead: "feature",
+      mergeSha: replayedCommit,
+    });
+
+    // Assert — still recognized as a 1:1 rebase despite the line-offset shift.
+    expect(shape).toEqual({
+      kind: "rebase",
+      pairs: [[featureCommit, replayedCommit]],
+    });
+  });
+
+  it("reports a real merge commit as nothing to reconcile", async () => {
+    // Arrange — a true merge (>1 parent) keeps PR commits reachable, so the
+    // parent-count short-circuit returns before any shape analysis.
+    const { detectMergeShape } = await import("./reconcile.js");
+    const repoPath = TestFactory.makeRepo();
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "-b", "feature");
+    commitFile(repoPath, "feat-a.txt");
+    TestFactory.git(repoPath, "git", "checkout", "-q", "main");
+    TestFactory.git(repoPath, "git", "merge", "-q", "--no-ff", "--no-edit", "feature");
+    const mergeSha = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+
+    // Act + Assert
+    expect(detectMergeShape(repoPath, { baseRef: "main", prHead: "feature", mergeSha })).toEqual({
+      kind: "merge-commit",
+    });
+  });
+
+  it("reports a commit that is neither a squash nor a rebase of the PR as unrecognized", async () => {
+    // Arrange — an unrelated single-parent commit on main that shares no diff
+    // with the PR. Detection must skip (never mis-stamp) rather than guess.
+    const { detectMergeShape } = await import("./reconcile.js");
+    const repoPath = TestFactory.makeRepo();
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "-b", "feature");
+    commitFile(repoPath, "feat-a.txt");
+    TestFactory.git(repoPath, "git", "checkout", "-q", "main");
+    const unrelatedCommit = commitFile(repoPath, "unrelated.txt");
+
+    // Act + Assert
+    expect(detectMergeShape(repoPath, { baseRef: "main", prHead: "feature", mergeSha: unrelatedCommit })).toEqual({
+      kind: "unrecognized",
+    });
+  });
+
+  it("reconcileMerge pushes the remapped notes only when a stamp actually moved", async () => {
+    // Arrange — a stamped, squash-merged PR whose main tip (incl. the squash
+    // commit) is on a bare remote, exactly as the CI reconcile job sees it.
+    const { reconcileMerge } = await import("./reconcile.js");
+    const repoPath = TestFactory.makeRepo();
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "-b", "feature");
+    const firstFeatureCommit = commitFile(repoPath, "feat-a.txt");
+    writeNote(firstFeatureCommit, TestFactory.makeSessionNote({ output: 21 }), repoPath);
+    const secondFeatureCommit = commitFile(repoPath, "feat-b.txt"); // two commits → true squash
+    writeNote(secondFeatureCommit, TestFactory.makeSessionNote({ output: 9 }), repoPath);
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "main");
+    commitFile(repoPath, "unrelated-drift.txt");
+    TestFactory.git(repoPath, "git", "merge", "--squash", "feature");
+    TestFactory.git(repoPath, "git", "commit", "-q", "-m", "feature (squashed)");
+    const squashCommit = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+    const remotePath = TestFactory.addBareRemote(repoPath); // pushes main incl. squashCommit
+
+    // Act — the CLI's exact path: reconcile, then push iff a stamp moved.
+    const outcome = reconcileMerge(repoPath, { baseRef: "origin/main", prHead: "feature", mergeSha: squashCommit });
+    if (outcome.wrote) await prePush(repoPath, "origin");
+
+    // Assert — both PR stamps consolidate onto the squash commit locally AND get
+    // pushed (21 + 9 summed per the shared session id).
+    expect(outcome.shape.kind).toBe("squash");
+    expect(outcome.wrote).toBe(true);
+    expect(readNote(squashCommit, repoPath)!.sessions[0].output).toBe(30);
+    expect(readNote(squashCommit, remotePath)!.sessions[0].output).toBe(30);
+  });
+
+  it("reconcileMerge leaves the notes push closed for a stamp-less rebase", async () => {
+    // Arrange — a rebase-merged PR whose commits carry NO wick notes. Detection
+    // must recognize the rebase but report wrote=false so the CLI skips the
+    // (pointless, and per CLAUDE.md once-costly) force-with-lease round-trip.
+    const { reconcileMerge } = await import("./reconcile.js");
+    const repoPath = TestFactory.makeRepo();
+    const forkPoint = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+
+    TestFactory.git(repoPath, "git", "checkout", "-q", "-b", "feature");
+    commitFile(repoPath, "feat-a.txt"); // deliberately unstamped
+    TestFactory.git(repoPath, "git", "checkout", "-q", "main");
+    commitFile(repoPath, "unrelated-drift.txt");
+    TestFactory.git(repoPath, "git", "cherry-pick", `${forkPoint}..feature`);
+    const mergeSha = TestFactory.git(repoPath, "git", "rev-parse", "HEAD");
+
+    // Act
+    const outcome = reconcileMerge(repoPath, { baseRef: "main", prHead: "feature", mergeSha });
+
+    // Assert — shape detected, but nothing written → push stays closed.
+    expect(outcome.shape.kind).toBe("rebase");
+    expect(outcome.wrote).toBe(false);
+    expect(readNote(mergeSha, repoPath)).toBeNull();
+  });
+});
+
 describe("corrupt transcript resilience", () => {
   it("a git commit never fails because of wick, even with a corrupt transcript", async () => {
     // Arrange
