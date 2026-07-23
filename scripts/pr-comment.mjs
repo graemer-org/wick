@@ -8,33 +8,14 @@
  * Set WICK_DRY_RUN=1 to print the rendered comment instead of posting.
  */
 import { readFileSync } from "node:fs";
+// Shared formatters live in the built report module — the single source of the
+// token/cost/flavor formatting, so this script never copies it out of sync.
+import { costFlavor, fmtCost, fmtTokens } from "../dist/report.js";
 
 const MARKER = "<!-- wick-report -->";
 
 const [, , reportPath] = process.argv;
 const report = JSON.parse(readFileSync(reportPath, "utf8"));
-
-function fmtTokens(n) {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
-
-function fmtCost(c) {
-  return c === null ? "n/a" : `$${c.toFixed(2)}`;
-}
-
-// Keep in sync with costFlavor() in src/report.ts.
-function costFlavor(c) {
-  if (c === null) return null;
-  if (c === 0) return "barely singed the wick 🕯️";
-  if (c < 1) return "cheaper than a gumball 🍬";
-  if (c < 5) return "about one fancy latte ☕";
-  if (c < 20) return "a solid lunch 🌯";
-  if (c < 75) return "a nice dinner for two 🍝";
-  if (c < 250) return "a AAA game plus the DLC 🎮";
-  return "somebody's GPU bill 🔥";
-}
 
 const sumTok = (t) => t.input + t.cacheRead + t.cacheWrite + t.output;
 

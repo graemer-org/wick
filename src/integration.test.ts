@@ -7,7 +7,7 @@ import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { postCommit, postRewrite, prePush } from "./hooks/index.js";
 import { readNote, syncNotesFromRemote, writeNote } from "./notes.js";
-import { buildReport, formatCostOutput, renderCostLine, summarizeCost } from "./report.js";
+import { buildReport, costFlavor, formatCostOutput, renderCostLine, renderNoCommitComment, summarizeCost } from "./report.js";
 import { clearProviders, collectUsage, registerProvider, type SessionUsage } from "./providers/types.js";
 import type { PricingTable } from "./pricing.js";
 import { TestFactory } from "./test-factory.js";
@@ -698,5 +698,72 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     expect(renderCostLine(zeroTokenSession).startsWith("wick: 0 tokens ")).toBe(true);
     expect(renderCostLine(zeroTokenSession)).toBe("wick: 0 tokens ≈ n/a across 1 session");
     expect(renderCostLine(noSessions).startsWith("wick: 0 tokens ")).toBe(true);
+  });
+
+  it("renderNoCommitComment mirrors the report comment's header, table and flavor", () => {
+    // Arrange — a priced two-session run with a full token breakdown.
+    const pricing: PricingTable = {
+      "claude-code": [{ match: "m", input: 3, cacheRead: 0, cacheWrite: 0, output: 15 }],
+    };
+    const summary = summarizeCost(
+      [
+        TestFactory.makeSessionUsage("s1", "m", {
+          input: 40_000,
+          cacheRead: 1_200_000,
+          cacheWrite: 8_000,
+          output: 12_000,
+        }),
+        TestFactory.makeSessionUsage("s2", "m", { input: 10_000, output: 500 }),
+      ],
+      pricing,
+    );
+
+    // Act
+    const comment = renderNoCommitComment(summary);
+
+    // Assert — the shared visual language: header, 🔥 line, breakdown table, flavor.
+    expect(comment).toContain("### 🕯️ Wick — this run cost **$0.34** — no commit produced");
+    expect(comment).toContain("🔥 **1.3M tokens** · **2 sessions**");
+    expect(comment).toContain("| 📥 input | ⚡ cache read | 📝 cache write | 📤 output |");
+    expect(comment).toContain("| 50.0k | 1.2M | 8.0k | 12.5k |");
+    expect(comment).toContain(`> ≈ ${costFlavor(summary.costUsd)}`);
+    // No commit-only sections leak in.
+    expect(comment).not.toContain("by author");
+    expect(comment).not.toContain("budget");
+    expect(comment).not.toContain("per-commit");
+  });
+
+  it("renderNoCommitComment warns about unpriced models and drops the flavor line", () => {
+    // Arrange — an unpriced model: cost is a lower bound (null), so no flavor.
+    const summary = summarizeCost(
+      [TestFactory.makeSessionUsage("s1", "mystery", { output: 2_000_000 })],
+      {},
+    );
+
+    // Act
+    const comment = renderNoCommitComment(summary);
+
+    // Assert — n/a cost, one session, the lower-bound warning, and no `> ≈` line.
+    expect(comment).toContain("this run cost **n/a** — no commit produced");
+    expect(comment).toContain("🔥 **2.0M tokens** · **1 session**");
+    expect(comment).toContain("⚠️ _no pricing for: claude-code/mystery — cost is a lower bound_");
+    expect(comment).not.toContain("> ≈");
+  });
+
+  it("renderNoCommitComment keeps markdown-special model names inline (no shell path)", () => {
+    // Arrange — a model name full of characters that would be dangerous on a
+    // shell path but are inert in a JSON→REST comment body.
+    const nastyModel = "evil`$(rm -rf /)`; drop | table";
+    const summary = summarizeCost(
+      [TestFactory.makeSessionUsage("s1", nastyModel, { output: 100 })],
+      {},
+    );
+
+    // Act
+    const comment = renderNoCommitComment(summary);
+
+    // Assert — the raw string is embedded verbatim (never interpolated into a
+    // shell command), so it appears exactly as-is in the warning.
+    expect(comment).toContain(`claude-code/${nastyModel}`);
   });
 });
