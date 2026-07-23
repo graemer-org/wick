@@ -83,7 +83,7 @@ jobs:
         with: { mode: reconcile }
 ```
 
-Every PR gets one comment with the total cost (and a per-author split when several people pushed), updated in place on every push — no comment spam. The `reconcile` job detects how the PR was merged: merge commit → nothing to do, squash → all stamps consolidated onto the squash commit, rebase → stamps remapped 1:1. Merge however you like; the costs follow.
+Every PR gets one comment with the total cost (and a per-author split when several people pushed), updated in place on every push — no comment spam. That same comment also folds in the cost of any `@claude`/agent runs that produced no commit (see below), so a PR's whole AI cost lives in one place. The `reconcile` job detects how the PR was merged: merge commit → nothing to do, squash → all stamps consolidated onto the squash commit, rebase → stamps remapped 1:1. Merge however you like; the costs follow.
 
 ## Capturing AI cost in CI
 
@@ -112,11 +112,7 @@ steps:
       comment-issue: ${{ github.event.issue.number || github.event.pull_request.number }}
 ```
 
-If the agent committed, the commit is stamped and `refs/notes/wick` is pushed like any local commit. If it only answered (no commit), there's nothing to anchor a note to, so the run's cost is logged, and — when `comment-issue` is set — also posted as a one-line comment (`wick cost` computes it from the same transcripts):
-
-```
-🤖 wick: 82.4k tokens ≈ $0.41 across 1 session — no commit produced.
-```
+If the agent committed, the commit is stamped and `refs/notes/wick` is pushed like any local commit. If it only answered (no commit), there's nothing to anchor a note to, so the run's cost is logged (`wick cost` computes it from the same transcripts) and — when `comment-issue` is set — folded into the PR's sticky Wick comment under an **action runs** section. Several `@claude`/triage turns on one PR accumulate into that one comment rather than stacking. On an issue (triage), where there's no PR report, the same comment holds just the action-run costs.
 
 ## Cost badge
 

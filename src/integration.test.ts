@@ -7,18 +7,18 @@ import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { postCommit, postRewrite, prePush } from "./hooks/index.js";
 import { readNote, syncNotesFromRemote, writeNote } from "./notes.js";
-import { accumulateNoCommit, buildReport, formatCostOutput, parseNoCommitComment, renderCostLine, renderNoCommitComment, summarizeCost } from "./report.js";
+import { accumulateNoCommit, buildReport, formatCostOutput, parseNoCommitComment, parsePrComment, renderCostLine, renderPrComment, summarizeCost, type Report } from "./report.js";
 import { clearProviders, collectUsage, registerProvider, type SessionUsage } from "./providers/types.js";
 import type { PricingTable } from "./pricing.js";
 import { TestFactory } from "./test-factory.js";
 
 /**
- * Replace the no-commit comment's hidden base64 state block with a placeholder
- * so snapshots stay human-readable — the base64 round-trip is covered by the
+ * Replace the unified comment's hidden base64 state block with a placeholder so
+ * snapshots stay human-readable — the base64 round-trip is covered by the
  * accumulation/security tests, not the visual snapshots.
  */
 const visibleComment = (body: string) =>
-  body.replace(/<!-- wick-cost-state:.*?-->/, "<!-- wick-cost-state: … -->");
+  body.replace(/<!-- wick-pr-cost-state:.*?-->/, "<!-- wick-pr-cost-state: … -->");
 
 describe("installer (chain-safe)", () => {
   it("preserves an existing Husky-style hook, appends a wick block, and is idempotent", async () => {
@@ -1050,115 +1050,262 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     expect(renderCostLine(noSessions).startsWith("wick: 0 tokens ")).toBe(true);
   });
 
-  it("renderNoCommitComment mirrors the report comment's header, table and flavor", () => {
-    // Arrange — a single priced two-session run with a full token breakdown.
+  it("renderPrComment renders the commit-attributed report half with budget and authors", () => {
+    // Arrange — a two-commit, two-author report, under budget, no no-commit runs.
+    const report: Report = {
+      range: "base..HEAD",
+      commits: [
+        { commit: "1111111aaaa", subject: "feat: a thing", author: "Pat", authorEmail: "p@x", sessions: ["s1"], tokens: { input: 40_000, cacheRead: 1_200_000, cacheWrite: 8_000, output: 12_000 }, costUsd: 1.5 },
+        { commit: "2222222bbbb", subject: "fix: another", author: "Jo", authorEmail: "j@x", sessions: ["s2"], tokens: { input: 1_000, cacheRead: 50_000, cacheWrite: 2_000, output: 3_000 }, costUsd: 0.6 },
+      ],
+      authors: [
+        { author: "Pat", authorEmail: "p@x", stampedCommits: 1, sessions: 1, tokens: { input: 40_000, cacheRead: 1_200_000, cacheWrite: 8_000, output: 12_000 }, costUsd: 1.5 },
+        { author: "Jo", authorEmail: "j@x", stampedCommits: 1, sessions: 1, tokens: { input: 1_000, cacheRead: 50_000, cacheWrite: 2_000, output: 3_000 }, costUsd: 0.6 },
+      ],
+      budget: { limitUsd: 15, usedUsd: 2.1, usedFraction: 0.14, status: "ok" },
+      totals: { tokens: { input: 41_000, cacheRead: 1_250_000, cacheWrite: 10_000, output: 15_000 }, costUsd: 2.1, sessions: 2, stampedCommits: 2, commits: 3 },
+      unknownModels: [],
+    };
+
+    // Act
+    const comment = renderPrComment({ report });
+
+    // Assert — combined header (report only), budget annotated commit-attributed,
+    // by-author line, per-commit details; no action-runs section.
+    expect(visibleComment(comment)).toMatchInlineSnapshot(`
+      "<!-- wick-pr-cost -->
+      <!-- wick-pr-cost-state: … -->
+      ### 🕯️ Wick — this PR cost **$2.10**
+
+      🔥 **1.3M tokens** · **2 sessions** · **2/3 commits stamped**
+
+      | 📥 input | ⚡ cache read | 📝 cache write | 📤 output |
+      |---:|---:|---:|---:|
+      | 41.0k | 1.3M | 10.0k | 15.0k |
+
+      🎯 **budget:** $2.10 / $15.00 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 14% _(commit-attributed spend)_
+
+      👥 **by author:** Pat **$1.50** · Jo **$0.60**
+
+      <details>
+      <summary>💸 per-commit breakdown (2): <strong>$2.10</strong></summary>
+
+      | commit | subject | author | burn | tokens | cost |
+      |---|---|---|---|---:|---:|
+      | \`1111111\` | feat: a thing | Pat | 🟧🟧🟧🟧🟧 | 1.3M | **$1.50** |
+      | \`2222222\` | fix: another | Jo | 🟧 | 56.0k | **$0.60** |
+
+      </details>
+
+      > ≈ about one fancy latte ☕"
+    `);
+  });
+
+  it("renderPrComment renders the no-commit half alone (issue triage, no commits)", () => {
+    // Arrange — a single priced run, no report half (an issue triage turn).
     const pricing: PricingTable = {
       "claude-code": [{ match: "m", input: 3, cacheRead: 0, cacheWrite: 0, output: 15 }],
     };
-    const summary = summarizeCost(
-      [
-        TestFactory.makeSessionUsage("s1", "m", {
-          input: 40_000,
-          cacheRead: 1_200_000,
-          cacheWrite: 8_000,
-          output: 12_000,
-        }),
-        TestFactory.makeSessionUsage("s2", "m", { input: 10_000, output: 500 }),
-      ],
+    const run = summarizeCost(
+      [TestFactory.makeSessionUsage("s1", "m", { input: 40_000, cacheRead: 1_200_000, cacheWrite: 8_000, output: 12_000 })],
       pricing,
     );
 
     // Act
-    const comment = renderNoCommitComment(accumulateNoCommit(null, summary));
+    const comment = renderPrComment({
+      noCommit: accumulateNoCommit(null, run, { label: "run 7", url: "https://ci/7" }),
+    });
 
-    // Assert — the whole rendered comment: marker, singular "run" header, 🔥 line,
-    // shared breakdown table, flavor; no per-run table for a single run.
+    // Assert — no budget/author/commit sections; the action-runs table shows even
+    // for a single run (the header is the grand total, so the run subtotal isn't
+    // otherwise visible).
     expect(visibleComment(comment)).toMatchInlineSnapshot(`
-      "<!-- wick-cost -->
-      <!-- wick-cost-state: … -->
-      ### 🕯️ Wick — no-commit run cost **$0.34**
+      "<!-- wick-pr-cost -->
+      <!-- wick-pr-cost-state: … -->
+      ### 🕯️ Wick — this PR cost **$0.30**
 
-      🔥 **1.3M tokens** · **1 run** · **2 sessions**
+      🔥 **1.3M tokens** · **1 session** · **1 no-commit run**
 
       | 📥 input | ⚡ cache read | 📝 cache write | 📤 output |
       |---:|---:|---:|---:|
-      | 50.0k | 1.2M | 8.0k | 12.5k |
+      | 40.0k | 1.2M | 8.0k | 12.0k |
+
+      <details>
+      <summary>🤖 action runs (1): <strong>$0.30</strong></summary>
+
+      | run | sessions | burn | tokens | cost |
+      |---|---:|---|---:|---:|
+      | [run 7](https://ci/7) | 1 | 🟧🟧🟧🟧🟧 | 1.3M | **$0.30** |
+
+      </details>
 
       > ≈ cheaper than a gumball 🍬"
     `);
   });
 
-  it("renderNoCommitComment warns about unpriced models and drops the flavor line", () => {
-    // Arrange — an unpriced model: cost is a lower bound (null), so no flavor.
-    const summary = summarizeCost(
-      [TestFactory.makeSessionUsage("s1", "mystery", { output: 2_000_000 })],
+  it("renderPrComment combines commit and no-commit halves under one header", () => {
+    // Arrange — a $2.10 commit report plus two no-commit runs ($1.00 + $0.60).
+    const report: Report = {
+      range: "base..HEAD",
+      commits: [
+        { commit: "1111111aaaa", subject: "feat: a thing", author: "Pat", authorEmail: "p@x", sessions: ["s1"], tokens: { input: 40_000, cacheRead: 1_200_000, cacheWrite: 8_000, output: 12_000 }, costUsd: 2.1 },
+      ],
+      authors: [
+        { author: "Pat", authorEmail: "p@x", stampedCommits: 1, sessions: 1, tokens: { input: 40_000, cacheRead: 1_200_000, cacheWrite: 8_000, output: 12_000 }, costUsd: 2.1 },
+      ],
+      budget: { limitUsd: 15, usedUsd: 2.1, usedFraction: 0.14, status: "ok" },
+      totals: { tokens: { input: 40_000, cacheRead: 1_200_000, cacheWrite: 8_000, output: 12_000 }, costUsd: 2.1, sessions: 2, stampedCommits: 1, commits: 2 },
+      unknownModels: [],
+    };
+    const pricing: PricingTable = {
+      "claude-code": [{ match: "m", input: 0, cacheRead: 0, cacheWrite: 0, output: 10 }],
+    };
+    const run1 = summarizeCost([TestFactory.makeSessionUsage("r1", "m", { output: 100_000 })], pricing);
+    const run2 = summarizeCost([TestFactory.makeSessionUsage("r2", "m", { output: 60_000 })], pricing);
+    let noCommit = accumulateNoCommit(null, run1, { label: "run 1", url: "https://ci/1" });
+    noCommit = accumulateNoCommit(noCommit, run2, { label: "run 2", url: "https://ci/2" });
+
+    // Act
+    const comment = renderPrComment({ report, noCommit });
+
+    // Assert — one header summing both halves ($2.10 + $1.60 = $3.70), a 🔥 line
+    // carrying both the commits-stamped and no-commit-runs counts, the budget bar
+    // still commit-attributed only, and both breakdown sections present.
+    expect(visibleComment(comment)).toMatchInlineSnapshot(`
+      "<!-- wick-pr-cost -->
+      <!-- wick-pr-cost-state: … -->
+      ### 🕯️ Wick — this PR cost **$3.70**
+
+      🔥 **1.4M tokens** · **4 sessions** · **1/2 commits stamped** · **2 no-commit runs**
+
+      | 📥 input | ⚡ cache read | 📝 cache write | 📤 output |
+      |---:|---:|---:|---:|
+      | 40.0k | 1.2M | 8.0k | 172.0k |
+
+      🎯 **budget:** $2.10 / $15.00 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 14% _(commit-attributed spend)_
+
+      <details>
+      <summary>💸 per-commit breakdown (1): <strong>$2.10</strong></summary>
+
+      | commit | subject | author | burn | tokens | cost |
+      |---|---|---|---|---:|---:|
+      | \`1111111\` | feat: a thing | Pat | 🟧🟧🟧🟧🟧 | 1.3M | **$2.10** |
+
+      </details>
+
+      <details>
+      <summary>🤖 action runs (2): <strong>$1.60</strong></summary>
+
+      | run | sessions | burn | tokens | cost |
+      |---|---:|---|---:|---:|
+      | [run 1](https://ci/1) | 1 | 🟧🟧🟧🟧🟧 | 100.0k | **$1.00** |
+      | [run 2](https://ci/2) | 1 | 🟧🟧🟧 | 60.0k | **$0.60** |
+
+      </details>
+
+      > ≈ about one fancy latte ☕"
+    `);
+  });
+
+  it("renderPrComment merges and dedupes unknown-model warnings across both halves", () => {
+    // Arrange — the report half prices one commit but leaves two models unknown;
+    // the no-commit half re-hits one of those and adds a third.
+    const report: Report = {
+      range: "base..HEAD",
+      commits: [
+        { commit: "1111111aaaa", subject: "feat: partial pricing", author: "Pat", authorEmail: "p@x", sessions: ["s1"], tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 100_000 }, costUsd: 1 },
+      ],
+      authors: [
+        { author: "Pat", authorEmail: "p@x", stampedCommits: 1, sessions: 1, tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 100_000 }, costUsd: 1 },
+      ],
+      totals: { tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 100_000 }, costUsd: 1, sessions: 1, stampedCommits: 1, commits: 1 },
+      unknownModels: ["claude-code/mystery-a", "claude-code/shared"],
+    };
+    const run = summarizeCost(
+      [
+        TestFactory.makeSessionUsage("r1", "shared", { output: 10_000 }),
+        TestFactory.makeSessionUsage("r2", "mystery-b", { output: 10_000 }),
+      ],
       {},
     );
 
     // Act
-    const comment = renderNoCommitComment(accumulateNoCommit(null, summary));
+    const comment = renderPrComment({ report, noCommit: accumulateNoCommit(null, run) });
 
-    // Assert — n/a cost, the lower-bound warning, and no `> ≈` flavor line.
-    expect(visibleComment(comment)).toMatchInlineSnapshot(`
-      "<!-- wick-cost -->
-      <!-- wick-cost-state: … -->
-      ### 🕯️ Wick — no-commit run cost **n/a**
-
-      🔥 **2.0M tokens** · **1 run** · **1 session**
-
-      | 📥 input | ⚡ cache read | 📝 cache write | 📤 output |
-      |---:|---:|---:|---:|
-      | 0 | 0 | 0 | 2.0M |
-
-      ⚠️ _no pricing for: claude-code/mystery — cost is a lower bound_"
-    `);
+    // Assert — the combined cost is the priced $1.00 lower bound (the run priced
+    // nothing), and the warning lists all three unknown models exactly once.
+    expect(comment).toContain("### 🕯️ Wick — this PR cost **$1.00**");
+    expect(comment).toContain(
+      "⚠️ _no pricing for: claude-code/mystery-a, claude-code/shared, claude-code/mystery-b — cost is a lower bound_",
+    );
   });
 
-  it("accumulates no-commit runs into one comment with a per-run breakdown", () => {
-    // Arrange — a first run's comment, then a second run to fold into it. Each
-    // run carries a label + URL for its breakdown row.
+  it("the report and stamp writers each update their own half and preserve the other's", () => {
+    // Arrange — a report plus two no-commit runs, written by two writers that
+    // each see only their own comment and must not clobber the other's half.
     const pricing: PricingTable = {
       "claude-code": [{ match: "m", input: 0, cacheRead: 0, cacheWrite: 0, output: 10 }],
     };
-    const firstRun = summarizeCost([TestFactory.makeSessionUsage("s1", "m", { output: 100_000 })], pricing);
-    const secondRun = summarizeCost(
-      [
-        TestFactory.makeSessionUsage("s2", "m", { output: 300_000 }),
-        TestFactory.makeSessionUsage("s3", "m", { output: 100_000 }),
+    const run1 = summarizeCost([TestFactory.makeSessionUsage("r1", "m", { output: 100_000 })], pricing);
+    const run2 = summarizeCost([TestFactory.makeSessionUsage("r2", "m", { output: 300_000 })], pricing);
+    const report: Report = {
+      range: "base..HEAD",
+      commits: [
+        { commit: "1111111aaaa", subject: "feat: a thing", author: "Pat", authorEmail: "p@x", sessions: ["s1"], tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 200_000 }, costUsd: 2 },
       ],
-      pricing,
-    );
-    const firstComment = renderNoCommitComment(
-      accumulateNoCommit(null, firstRun, { label: "run 1", url: "https://ci/1" }),
-    );
+      authors: [
+        { author: "Pat", authorEmail: "p@x", stampedCommits: 1, sessions: 1, tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 200_000 }, costUsd: 2 },
+      ],
+      totals: { tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 200_000 }, costUsd: 2, sessions: 1, stampedCommits: 1, commits: 1 },
+      unknownModels: [],
+    };
 
-    // Act — the second run reloads the first comment's state and folds in.
-    const priorState = parseNoCommitComment(firstComment);
-    const secondComment = renderNoCommitComment(
-      accumulateNoCommit(priorState, secondRun, { label: "run 2", url: "https://ci/2" }),
-    );
+    // Act — stamp writer posts run 1, report writer folds the report in
+    // (preserving no-commit), stamp writer folds run 2 in (preserving report).
+    const afterStamp1 = renderPrComment({
+      noCommit: accumulateNoCommit(null, run1, { label: "run 1", url: "https://ci/1" }),
+    });
+    const seenByReport = parsePrComment(afterStamp1);
+    const afterReport = renderPrComment({ ...seenByReport, report });
+    const seenByStamp = parsePrComment(afterReport);
+    const afterStamp2 = renderPrComment({
+      report: seenByStamp?.report,
+      noCommit: accumulateNoCommit(seenByStamp?.noCommit ?? null, run2, { label: "run 2", url: "https://ci/2" }),
+    });
 
-    // Assert — the reloaded state carries the first run intact, and the updated
-    // comment reflects 2 runs, 3 sessions, summed cost, and a per-run table.
-    expect(priorState).toMatchObject({ runs: [{ summary: { totalTokens: 100_000 } }] });
-    expect(visibleComment(secondComment)).toMatchInlineSnapshot(`
-      "<!-- wick-cost -->
-      <!-- wick-cost-state: … -->
-      ### 🕯️ Wick — no-commit runs cost **$5.00**
+    // Assert — the report writer preserved run 1, and the second stamp preserved
+    // the report through to a state carrying both halves intact.
+    expect(seenByReport?.noCommit?.runs).toHaveLength(1);
+    const final = parsePrComment(afterStamp2);
+    expect(final?.report?.totals.stampedCommits).toBe(1);
+    expect(final?.noCommit?.runs).toHaveLength(2);
+    expect(visibleComment(afterStamp2)).toMatchInlineSnapshot(`
+      "<!-- wick-pr-cost -->
+      <!-- wick-pr-cost-state: … -->
+      ### 🕯️ Wick — this PR cost **$6.00**
 
-      🔥 **500.0k tokens** · **2 runs** · **3 sessions**
+      🔥 **600.0k tokens** · **3 sessions** · **1/1 commits stamped** · **2 no-commit runs**
 
       | 📥 input | ⚡ cache read | 📝 cache write | 📤 output |
       |---:|---:|---:|---:|
-      | 0 | 0 | 0 | 500.0k |
+      | 0 | 0 | 0 | 600.0k |
 
       <details>
-      <summary>💸 per-run breakdown (2)</summary>
+      <summary>💸 per-commit breakdown (1): <strong>$2.00</strong></summary>
+
+      | commit | subject | author | burn | tokens | cost |
+      |---|---|---|---|---:|---:|
+      | \`1111111\` | feat: a thing | Pat | 🟧🟧🟧🟧🟧 | 200.0k | **$2.00** |
+
+      </details>
+
+      <details>
+      <summary>🤖 action runs (2): <strong>$4.00</strong></summary>
 
       | run | sessions | burn | tokens | cost |
       |---|---:|---|---:|---:|
-      | [run 1](https://ci/1) | 1 | 🟧 | 100.0k | **$1.00** |
-      | [run 2](https://ci/2) | 2 | 🟧🟧🟧🟧🟧 | 400.0k | **$4.00** |
+      | [run 1](https://ci/1) | 1 | 🟧🟧 | 100.0k | **$1.00** |
+      | [run 2](https://ci/2) | 1 | 🟧🟧🟧🟧🟧 | 300.0k | **$3.00** |
 
       </details>
 
@@ -1166,17 +1313,71 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     `);
   });
 
-  it("parseNoCommitComment returns null for a comment with no recoverable state", () => {
-    // Arrange — bodies that must NOT be mistaken for a state-carrying comment.
-    const foreign = "### 🕯️ Wick — this PR cost **$1.00**\n<!-- wick-report -->";
-    const corrupt = "<!-- wick-cost -->\n<!-- wick-cost-state: not-valid-base64!! -->";
+  it("renderPrComment omits empty sections cleanly (report with no stamped commits)", () => {
+    // Arrange — a report over a range whose commits are all unstamped, no runs.
+    const report: Report = {
+      range: "base..HEAD",
+      commits: [],
+      authors: [],
+      totals: { tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, costUsd: 0, sessions: 0, stampedCommits: 0, commits: 4 },
+      unknownModels: [],
+    };
 
-    // Act + Assert — both start a fresh accumulation rather than throwing.
-    expect(parseNoCommitComment(foreign)).toBeNull();
-    expect(parseNoCommitComment(corrupt)).toBeNull();
+    // Act
+    const comment = renderPrComment({ report });
+
+    // Assert — no dangling "(0)" sections and no no-commit-run segment.
+    expect(comment).not.toContain("per-commit breakdown");
+    expect(comment).not.toContain("action runs");
+    expect(comment).not.toContain("no-commit run");
+    expect(visibleComment(comment)).toMatchInlineSnapshot(`
+      "<!-- wick-pr-cost -->
+      <!-- wick-pr-cost-state: … -->
+      ### 🕯️ Wick — this PR cost **$0.00**
+
+      🔥 **0 tokens** · **0 sessions** · **0/4 commits stamped**
+
+      | 📥 input | ⚡ cache read | 📝 cache write | 📤 output |
+      |---:|---:|---:|---:|
+      | 0 | 0 | 0 | 0 |
+
+      > ≈ barely singed the wick 🕯️"
+    `);
   });
 
-  it("renderNoCommitComment keeps markdown-special model names inline (no shell path)", () => {
+  it("parsePrComment and parseNoCommitComment return null for unrecoverable bodies", () => {
+    // Arrange — bodies that must NOT be mistaken for a state-carrying comment.
+    const foreign = "### 🕯️ Wick — this PR cost **$1.00**\n<!-- wick-report -->";
+    const corruptLegacy = "<!-- wick-cost -->\n<!-- wick-cost-state: not-valid-base64!! -->";
+    const corruptUnified = "<!-- wick-pr-cost -->\n<!-- wick-pr-cost-state: not-valid-base64!! -->";
+
+    // Act + Assert — every parse starts fresh rather than throwing.
+    expect(parseNoCommitComment(foreign)).toBeNull();
+    expect(parseNoCommitComment(corruptLegacy)).toBeNull();
+    expect(parsePrComment(foreign)).toBeNull();
+    expect(parsePrComment(corruptUnified)).toBeNull();
+  });
+
+  it("parseNoCommitComment still recovers a legacy no-commit comment (migration path)", () => {
+    // Arrange — the exact legacy `<!-- wick-cost -->` shape a transition PR carries,
+    // built by hand since the standalone renderer is gone. The writers read this
+    // once to fold the old comment's runs into the unified comment.
+    const legacyState = {
+      runs: [
+        {
+          summary: summarizeCost([TestFactory.makeSessionUsage("s1", "m", { output: 1_000 })], {}),
+          label: "run 3",
+          url: "https://ci/3",
+        },
+      ],
+    };
+    const legacyBody = `<!-- wick-cost -->\n<!-- wick-cost-state: ${Buffer.from(JSON.stringify(legacyState)).toString("base64")} -->\n### old body`;
+
+    // Act + Assert — the legacy run is recovered intact for migration.
+    expect(parseNoCommitComment(legacyBody)).toMatchObject({ runs: [{ label: "run 3", url: "https://ci/3" }] });
+  });
+
+  it("renderPrComment keeps markdown-special model names inline (no shell path)", () => {
     // Arrange — a model name full of characters that would be dangerous on a
     // shell path (and could break an HTML comment) but are inert here: visible
     // text is plain markdown, and the hidden state is base64-encoded.
@@ -1187,14 +1388,14 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     );
 
     // Act
-    const comment = renderNoCommitComment(accumulateNoCommit(null, summary));
+    const comment = renderPrComment({ noCommit: accumulateNoCommit(null, summary) });
 
     // Assert — the raw string appears verbatim in the visible warning, and the
     // base64 state still round-trips it back intact (the `-->` inside the name
     // never terminated the state block early).
     expect(comment).toContain(`claude-code/${nastyModel}`);
-    expect(parseNoCommitComment(comment)).toMatchObject({
-      runs: [{ summary: { unknownModels: [`claude-code/${nastyModel}`] } }],
+    expect(parsePrComment(comment)).toMatchObject({
+      noCommit: { runs: [{ summary: { unknownModels: [`claude-code/${nastyModel}`] } }] },
     });
   });
 });
