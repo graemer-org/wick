@@ -1,1 +1,1 @@
-{"v":1,"sessions":[{"id":"afded25d-0743-455d-8a45-fa63a23c955c","provider":"claude-code","model":"claude-opus-4-8","input":69,"cacheRead":4513349,"cacheWrite":66455,"output":43904},{"id":"e134b054-989e-4705-a727-f7fc2b61b849","provider":"claude-code","model":"claude-sonnet-5","input":44,"cacheRead":1453776,"cacheWrite":72126,"output":17872}]}
+{"v":1,"sessions":[{"id":"afded25d-0743-455d-8a45-fa63a23c955c","provider":"claude-code","model":"claude-opus-4-8","input":69,"cacheRead":4513349,"cacheWrite":66455,"output":43904}]}
