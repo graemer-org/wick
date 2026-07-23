@@ -102,6 +102,9 @@ runs:
         COMMENT_ISSUE: ${{ inputs.comment-issue }}
         COMMENT_ONLY: ${{ inputs.comment-only }}
         REPO: ${{ github.repository }}
+        # Label + link this run's row in the accumulating comment's per-run table.
+        WICK_RUN_LABEL: run ${{ github.run_number }}
+        WICK_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         set -euo pipefail
         WICK="node ${{ github.action_path }}/dist/cli.js"

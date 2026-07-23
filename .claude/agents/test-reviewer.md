@@ -18,6 +18,12 @@ Review **only the changed code and its tests** in the current PR against the mer
 - **AAA pattern (required)**: every test is structured **Arrange / Act / Assert**, with
   **descriptive variable and test names** (project + user convention). Flag tests that blur the
   three phases or use opaque names like `result2`.
+- **Snapshot rendered output**: assertions on multi-line rendered strings (comment / report / badge
+  markdown) must use a single `toMatchInlineSnapshot` over the whole string, **not** a stack of
+  `toContain` calls — a snapshot captures the real layout and can't silently pass while structure
+  rots around the matched substrings. Flag stacked `toContain`s on rendered output and recommend a
+  snapshot; non-deterministic bits (e.g. a base64 state blob) should be normalized to a placeholder
+  first, not left to churn the snapshot.
 - **Regression coverage of the documented invariant classes** — these were real bugs; changes near
   them need locking tests:
   - Delta attribution against cumulative baselines; **monotonic** baselines (no shrink).

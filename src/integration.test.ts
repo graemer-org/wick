@@ -7,10 +7,18 @@ import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
 import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
 import { postCommit, postRewrite, prePush } from "./hooks/index.js";
 import { readNote, syncNotesFromRemote, writeNote } from "./notes.js";
-import { buildReport, costFlavor, formatCostOutput, renderCostLine, renderNoCommitComment, summarizeCost } from "./report.js";
+import { accumulateNoCommit, buildReport, formatCostOutput, parseNoCommitComment, renderCostLine, renderNoCommitComment, summarizeCost } from "./report.js";
 import { clearProviders, collectUsage, registerProvider, type SessionUsage } from "./providers/types.js";
 import type { PricingTable } from "./pricing.js";
 import { TestFactory } from "./test-factory.js";
+
+/**
+ * Replace the no-commit comment's hidden base64 state block with a placeholder
+ * so snapshots stay human-readable — the base64 round-trip is covered by the
+ * accumulation/security tests, not the visual snapshots.
+ */
+const visibleComment = (body: string) =>
+  body.replace(/<!-- wick-cost-state:.*?-->/, "<!-- wick-cost-state: … -->");
 
 describe("installer (chain-safe)", () => {
   it("preserves an existing Husky-style hook, appends a wick block, and is idempotent", async () => {
@@ -779,7 +787,7 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
   });
 
   it("renderNoCommitComment mirrors the report comment's header, table and flavor", () => {
-    // Arrange — a priced two-session run with a full token breakdown.
+    // Arrange — a single priced two-session run with a full token breakdown.
     const pricing: PricingTable = {
       "claude-code": [{ match: "m", input: 3, cacheRead: 0, cacheWrite: 0, output: 15 }],
     };
@@ -797,18 +805,23 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     );
 
     // Act
-    const comment = renderNoCommitComment(summary);
+    const comment = renderNoCommitComment(accumulateNoCommit(null, summary));
 
-    // Assert — the shared visual language: header, 🔥 line, breakdown table, flavor.
-    expect(comment).toContain("### 🕯️ Wick — this run cost **$0.34** — no commit produced");
-    expect(comment).toContain("🔥 **1.3M tokens** · **2 sessions**");
-    expect(comment).toContain("| 📥 input | ⚡ cache read | 📝 cache write | 📤 output |");
-    expect(comment).toContain("| 50.0k | 1.2M | 8.0k | 12.5k |");
-    expect(comment).toContain(`> ≈ ${costFlavor(summary.costUsd)}`);
-    // No commit-only sections leak in.
-    expect(comment).not.toContain("by author");
-    expect(comment).not.toContain("budget");
-    expect(comment).not.toContain("per-commit");
+    // Assert — the whole rendered comment: marker, singular "run" header, 🔥 line,
+    // shared breakdown table, flavor; no per-run table for a single run.
+    expect(visibleComment(comment)).toMatchInlineSnapshot(`
+      "<!-- wick-cost -->
+      <!-- wick-cost-state: … -->
+      ### 🕯️ Wick — no-commit run cost **$0.34**
+
+      🔥 **1.3M tokens** · **1 run** · **2 sessions**
+
+      | 📥 input | ⚡ cache read | 📝 cache write | 📤 output |
+      |---:|---:|---:|---:|
+      | 50.0k | 1.2M | 8.0k | 12.5k |
+
+      > ≈ cheaper than a gumball 🍬"
+    `);
   });
 
   it("renderNoCommitComment warns about unpriced models and drops the flavor line", () => {
@@ -819,29 +832,105 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
     );
 
     // Act
-    const comment = renderNoCommitComment(summary);
+    const comment = renderNoCommitComment(accumulateNoCommit(null, summary));
 
-    // Assert — n/a cost, one session, the lower-bound warning, and no `> ≈` line.
-    expect(comment).toContain("this run cost **n/a** — no commit produced");
-    expect(comment).toContain("🔥 **2.0M tokens** · **1 session**");
-    expect(comment).toContain("⚠️ _no pricing for: claude-code/mystery — cost is a lower bound_");
-    expect(comment).not.toContain("> ≈");
+    // Assert — n/a cost, the lower-bound warning, and no `> ≈` flavor line.
+    expect(visibleComment(comment)).toMatchInlineSnapshot(`
+      "<!-- wick-cost -->
+      <!-- wick-cost-state: … -->
+      ### 🕯️ Wick — no-commit run cost **n/a**
+
+      🔥 **2.0M tokens** · **1 run** · **1 session**
+
+      | 📥 input | ⚡ cache read | 📝 cache write | 📤 output |
+      |---:|---:|---:|---:|
+      | 0 | 0 | 0 | 2.0M |
+
+      ⚠️ _no pricing for: claude-code/mystery — cost is a lower bound_"
+    `);
+  });
+
+  it("accumulates no-commit runs into one comment with a per-run breakdown", () => {
+    // Arrange — a first run's comment, then a second run to fold into it. Each
+    // run carries a label + URL for its breakdown row.
+    const pricing: PricingTable = {
+      "claude-code": [{ match: "m", input: 0, cacheRead: 0, cacheWrite: 0, output: 10 }],
+    };
+    const firstRun = summarizeCost([TestFactory.makeSessionUsage("s1", "m", { output: 100_000 })], pricing);
+    const secondRun = summarizeCost(
+      [
+        TestFactory.makeSessionUsage("s2", "m", { output: 300_000 }),
+        TestFactory.makeSessionUsage("s3", "m", { output: 100_000 }),
+      ],
+      pricing,
+    );
+    const firstComment = renderNoCommitComment(
+      accumulateNoCommit(null, firstRun, { label: "run 1", url: "https://ci/1" }),
+    );
+
+    // Act — the second run reloads the first comment's state and folds in.
+    const priorState = parseNoCommitComment(firstComment);
+    const secondComment = renderNoCommitComment(
+      accumulateNoCommit(priorState, secondRun, { label: "run 2", url: "https://ci/2" }),
+    );
+
+    // Assert — the reloaded state carries the first run intact, and the updated
+    // comment reflects 2 runs, 3 sessions, summed cost, and a per-run table.
+    expect(priorState).toMatchObject({ runs: [{ summary: { totalTokens: 100_000 } }] });
+    expect(visibleComment(secondComment)).toMatchInlineSnapshot(`
+      "<!-- wick-cost -->
+      <!-- wick-cost-state: … -->
+      ### 🕯️ Wick — no-commit runs cost **$5.00**
+
+      🔥 **500.0k tokens** · **2 runs** · **3 sessions**
+
+      | 📥 input | ⚡ cache read | 📝 cache write | 📤 output |
+      |---:|---:|---:|---:|
+      | 0 | 0 | 0 | 500.0k |
+
+      <details>
+      <summary>💸 per-run breakdown (2)</summary>
+
+      | run | sessions | burn | tokens | cost |
+      |---|---:|---|---:|---:|
+      | [run 1](https://ci/1) | 1 | 🟧 | 100.0k | **$1.00** |
+      | [run 2](https://ci/2) | 2 | 🟧🟧🟧🟧🟧 | 400.0k | **$4.00** |
+
+      </details>
+
+      > ≈ a solid lunch 🌯"
+    `);
+  });
+
+  it("parseNoCommitComment returns null for a comment with no recoverable state", () => {
+    // Arrange — bodies that must NOT be mistaken for a state-carrying comment.
+    const foreign = "### 🕯️ Wick — this PR cost **$1.00**\n<!-- wick-report -->";
+    const corrupt = "<!-- wick-cost -->\n<!-- wick-cost-state: not-valid-base64!! -->";
+
+    // Act + Assert — both start a fresh accumulation rather than throwing.
+    expect(parseNoCommitComment(foreign)).toBeNull();
+    expect(parseNoCommitComment(corrupt)).toBeNull();
   });
 
   it("renderNoCommitComment keeps markdown-special model names inline (no shell path)", () => {
     // Arrange — a model name full of characters that would be dangerous on a
-    // shell path but are inert in a JSON→REST comment body.
-    const nastyModel = "evil`$(rm -rf /)`; drop | table";
+    // shell path (and could break an HTML comment) but are inert here: visible
+    // text is plain markdown, and the hidden state is base64-encoded.
+    const nastyModel = "evil`$(rm -rf /)`--> <script> | drop";
     const summary = summarizeCost(
       [TestFactory.makeSessionUsage("s1", nastyModel, { output: 100 })],
       {},
     );
 
     // Act
-    const comment = renderNoCommitComment(summary);
+    const comment = renderNoCommitComment(accumulateNoCommit(null, summary));
 
-    // Assert — the raw string is embedded verbatim (never interpolated into a
-    // shell command), so it appears exactly as-is in the warning.
+    // Assert — the raw string appears verbatim in the visible warning, and the
+    // base64 state still round-trips it back intact (the `-->` inside the name
+    // never terminated the state block early).
     expect(comment).toContain(`claude-code/${nastyModel}`);
+    expect(parseNoCommitComment(comment)).toMatchObject({
+      runs: [{ summary: { unknownModels: [`claude-code/${nastyModel}`] } }],
+    });
   });
 });
