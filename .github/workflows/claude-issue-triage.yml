@@ -51,9 +51,15 @@ jobs:
             Do these three steps, then post ONE comment with the result:
 
             1. TRIAGE — Categorize the issue (bug / feature / question / docs /
-               invalid). Apply appropriate labels with `gh issue edit`; create a
-               label first with `gh label create` if it does not already exist. Use
-               `gh label list` to see what exists. Keep labels minimal and honest.
+               invalid). Apply the label(s) with the `mcp__github__update_issue`
+               tool (owner/repo from ${{ github.repository }}, issue_number
+               ISSUE_NUMBER). Use the repo's standard labels — bug, enhancement,
+               documentation, question, invalid — do not invent new ones. Its
+               `labels` array REPLACES the issue's current set, so include any
+               already-applied label you want to keep (they're listed in the issue
+               context above). Keep labels minimal and honest. This runs off the
+               GitHub API via MCP, not the shell, so it works even though this job
+               sandboxes Bash for untrusted issue content.
 
             2. VERIFY — Investigate the codebase by reading it (Read/Grep/Glob) to
                confirm the report. For a bug: locate the relevant code and judge from
@@ -71,13 +77,20 @@ jobs:
             `mcp__github_comment__update_claude_comment` (NOT `gh issue comment`).
             Be concise and specific; do not edit code or open a PR — this is triage
             only.
-          # No Bash code-execution (npm/node/git) here: issues come from untrusted
-          # reporters, so keep triage to read-only analysis, the gh issue/label
-          # commands needed to label, and the MCP tool used to post the comment.
+          # No Bash here at all. Issues come from untrusted reporters, so
+          # `allowed_non_write_users: "*"` puts claude-code-action into
+          # subprocess-isolation mode (bubblewrap), which breaks EVERY Bash call —
+          # the sandbox can't write its own .mcp.json, so `gh issue edit`/`gh label`
+          # silently no-op'd and labels never got applied (issue #40). Labeling
+          # therefore goes through the `mcp__github__update_issue` MCP tool (the
+          # bundled GitHub MCP server, auto-enabled by the mcp__github__ allow
+          # entry), which runs outside the Bash sandbox — the same reason the
+          # comment MCP tool already works under isolation. Analysis stays on the
+          # non-Bash Read/Grep/Glob tools.
           claude_args: |
             --model claude-sonnet-5
             --max-turns 25
-            --allowedTools "mcp__github_comment__update_claude_comment,Bash(gh issue:*),Bash(gh label:*),Read,Grep,Glob"
+            --allowedTools "mcp__github_comment__update_claude_comment,mcp__github__update_issue,Read,Grep,Glob"
 
       # Dogfood: triage burns tokens and makes no commit, so post its cost as a
       # comment on the issue. comment-only — never stamp. This step runs fixed
