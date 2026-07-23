@@ -25,7 +25,12 @@ function sanitize(raw: unknown): PricingTable {
       if (provider.startsWith("_") || !Array.isArray(entries)) continue;
       table[provider] = entries.filter(
         (e): e is PriceEntry =>
-          e && typeof e.match === "string" && typeof e.input === "number",
+          e &&
+          typeof e.match === "string" &&
+          Number.isFinite(e.input) &&
+          Number.isFinite(e.cacheRead) &&
+          Number.isFinite(e.cacheWrite) &&
+          Number.isFinite(e.output),
       );
     }
   }

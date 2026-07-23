@@ -84,7 +84,11 @@ runs:
           exit 0
         fi
 
-        git push origin refs/notes/wick
+        # Push the remapped notes via the safe fetch→merge→force-with-lease path
+        # (never a bare push). A concurrent stamp job advancing refs/notes/wick
+        # would non-fast-forward-reject a bare push and, under pipefail, discard
+        # the reconciled stamp with the runner.
+        $WICK hook pre-push --remote origin
 
     - name: Stamp AI cost (or comment when no commit)
       if: ${{ inputs.mode == 'stamp' }}
