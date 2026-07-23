@@ -1346,16 +1346,20 @@ describe("CI capture (issue #33) — stamp + push with hooks never installed", (
   });
 
   it("parsePrComment and parseNoCommitComment return null for unrecoverable bodies", () => {
-    // Arrange — bodies that must NOT be mistaken for a state-carrying comment.
+    // Arrange — bodies that must NOT be mistaken for a state-carrying comment,
+    // including a truncated state that decodes to a partial (non-Report) half —
+    // it must be rejected so renderPrComment never dereferences a bad `report`.
     const foreign = "### 🕯️ Wick — this PR cost **$1.00**\n<!-- wick-report -->";
     const corruptLegacy = "<!-- wick-cost -->\n<!-- wick-cost-state: not-valid-base64!! -->";
     const corruptUnified = "<!-- wick-pr-cost -->\n<!-- wick-pr-cost-state: not-valid-base64!! -->";
+    const partialReport = `<!-- wick-pr-cost-state: ${Buffer.from(JSON.stringify({ report: {} })).toString("base64")} -->`;
 
     // Act + Assert — every parse starts fresh rather than throwing.
     expect(parseNoCommitComment(foreign)).toBeNull();
     expect(parseNoCommitComment(corruptLegacy)).toBeNull();
     expect(parsePrComment(foreign)).toBeNull();
     expect(parsePrComment(corruptUnified)).toBeNull();
+    expect(parsePrComment(partialReport)).toBeNull();
   });
 
   it("parseNoCommitComment still recovers a legacy no-commit comment (migration path)", () => {

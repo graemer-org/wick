@@ -94,6 +94,8 @@ async function main() {
 
   // Garbage-collect any leftover legacy no-commit comments now folded in (best
   // effort). Leave legacy report comments alone — the report writer owns those.
+  // The delete is unconditional even if the legacy state was unparseable: that
+  // data was already unrecoverable, and a stale comment would defeat convergence.
   const writtenId = written?.id ?? target?.id;
   for (const c of comments) {
     if (c.id === writtenId) continue;

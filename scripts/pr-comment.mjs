@@ -94,7 +94,9 @@ async function main() {
   console.log(target ? "updated wick PR comment" : "created wick PR comment");
 
   // Garbage-collect any leftover legacy comments now folded into the unified one
-  // (best effort — a concurrent writer may have deleted them already).
+  // (best effort — a concurrent writer may have deleted them already). The delete
+  // is unconditional even if a legacy state block was unparseable: that data was
+  // already unrecoverable, and leaving the stale comment would defeat convergence.
   const writtenId = written?.id ?? target?.id;
   for (const c of comments) {
     if (c.id === writtenId) continue;

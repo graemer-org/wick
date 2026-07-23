@@ -87,12 +87,11 @@ runs:
         set -euo pipefail
         WICK="node ${{ github.action_path }}/dist/cli.js"
 
-        # Report this run's cost (from the runner's transcripts) as a comment
-        # styled like the sticky `wick report` comment. `wick cost`'s plain line
-        # stays the log + skip-guard signal; the comment body is rendered from
-        # `wick cost --json` by scripts/cost-comment.mjs (renderNoCommitComment) —
-        # one shared renderer, and the untrusted model names ride the REST body,
-        # never a shell argument.
+        # Fold this run's cost (from the runner's transcripts) into the PR's
+        # unified sticky cost comment. `wick cost`'s plain line stays the log +
+        # skip-guard signal; scripts/cost-comment.mjs adds the run to the comment's
+        # no-commit half via renderPrComment (dist/report.js) — one shared renderer,
+        # and the untrusted model names ride the REST body, never a shell argument.
         post_cost_comment() {
           COST_LINE=$($WICK cost)
           echo "$COST_LINE"
