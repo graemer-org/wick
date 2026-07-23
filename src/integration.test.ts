@@ -366,6 +366,26 @@ describe("report ranges", () => {
     expect(report.range).toBe("HEAD");
     expect(report.totals.tokens.output).toBe(10);
   });
+
+  it("throws on an explicit range git cannot resolve, instead of a silent empty report", () => {
+    // Arrange — a valid repo, but the caller typo'd the range.
+    const repoPath = TestFactory.makeRepo();
+
+    // Act + Assert — a bad ref is a user error, not "0 stamped commits".
+    expect(() => buildReport(repoPath, "mian..HEAD")).toThrow(/invalid revision range: mian\.\.HEAD/);
+  });
+
+  it("reports an empty range as empty, not as an error", () => {
+    // Arrange
+    const repoPath = TestFactory.makeRepo();
+
+    // Act — a valid but empty range (no commits between HEAD and itself).
+    const report = buildReport(repoPath, "HEAD..HEAD");
+
+    // Assert — empty is a legitimate report, distinct from a rejected range.
+    expect(report.totals.stampedCommits).toBe(0);
+    expect(report.commits).toEqual([]);
+  });
 });
 
 describe("mixed known/unknown pricing stays reconcilable", () => {
