@@ -45,12 +45,34 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Record HEAD before the agent runs so the stamp step can tell whether
-      # this run produced a commit (stamp it) or only answered (comment cost).
+      # Record the sha the agent will start from, so the stamp step can tell a
+      # run that produced a commit (stamp it) from one that only answered
+      # (comment the cost) via HEAD == base-sha.
+      #
+      # For a PR mention this must be the PR HEAD, NOT the checkout HEAD: on
+      # issue_comment / pull_request_review_comment events actions/checkout lands
+      # on the default branch, but claude-code-action then checks out the PR head
+      # — so a checkout-HEAD base-sha never equals the stamp step's HEAD and the
+      # run is always mis-read as "committed" (no comment, and it stamps the
+      # pre-existing PR head). Reading the PR head sha up front keeps them aligned.
       - name: Record base commit
         id: base
         shell: bash
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # issue_comment carries .issue.pull_request only when the issue is a PR.
+          PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          IS_PR: ${{ github.event.issue.pull_request != null || github.event_name == 'pull_request_review_comment' }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_PR" = "true" ]; then
+            sha=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid -q .headRefOid)
+          else
+            # Plain issue mention: no PR head, and claude-code-action stays on the
+            # checked-out default branch, so the checkout HEAD is the right base.
+            sha=$(git rev-parse HEAD)
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Run Claude
         uses: anthropics/claude-code-action@v1
