@@ -18,11 +18,18 @@ export async function postCommit(cwd: string, commit?: string): Promise<void> {
 
   await withLock(root, async () => {
     const state = await loadState(root);
+    // Stamp against the moment BEFORE we read: any transcript write racing this
+    // read carries an mtime past `stampTs`, so it is re-read next commit and no
+    // delta is lost (see GetUsageOptions.since).
+    const stampTs = new Date().toISOString();
     // Deltas are computed against CUMULATIVE session totals — do not pass a
     // time window here, or windowed totals get compared against cumulative
-    // baselines and every delta collapses to zero.
-    const usage = await collectUsage(root, {});
-    const { stamps, newState } = computeDelta(usage, state);
+    // baselines and every delta collapses to zero. `since` only lets providers
+    // skip UNCHANGED transcripts (zero delta), never bounds the totals.
+    const { usage, discovered } = await collectUsage(root, {
+      since: state.lastStampTs ?? undefined,
+    });
+    const { stamps, newState } = computeDelta(usage, state, stampTs, discovered);
     if (stamps.length > 0) {
       upsertNote(target, { v: 1, sessions: stamps }, root);
     }

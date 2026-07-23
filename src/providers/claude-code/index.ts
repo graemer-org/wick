@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
+  GetUsageOptions,
   ModelUsage,
   SessionRef,
   SessionUsage,
@@ -33,6 +34,18 @@ export function encodeProjectPath(projectPath: string): string {
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Slack subtracted from the mtime cutoff before deciding a transcript is
+ * unchanged. The "never skip a changed file" guarantee assumes mtime is at
+ * least as fine-grained as the ms cutoff, but coarse filesystems floor it:
+ * FAT to 2s, some NFS/SMB mounts to 1s. A write that genuinely happened after
+ * the cutoff could then carry an mtime floored below it and be wrongly skipped
+ * — and since the cutoff only advances, that delta would be lost for good.
+ * 2000ms ≥ the worst-case flooring (FAT) makes the skip strictly conservative:
+ * a changed file is never skipped, at most an unchanged one is re-read.
+ */
+const MTIME_SKIP_GUARD_MS = 2000;
 
 interface MessageUsage {
   model: string;
@@ -84,6 +97,36 @@ async function parseTranscriptFile(
   }
 }
 
+/**
+ * Newest mtime (ms) across all files that feed a session's usage — the main
+ * transcript plus any subagent transcripts. Returns null if none exist.
+ *
+ * Both are considered: a subagent file can be appended after the parent
+ * transcript's last write, so keying the skip on the main transcript alone
+ * could miss real subagent deltas.
+ */
+async function newestSessionMtimeMs(session: SessionRef): Promise<number | null> {
+  let newest: number | null = null;
+  const consider = async (file: string): Promise<void> => {
+    try {
+      const st = await fs.stat(file);
+      if (newest === null || st.mtimeMs > newest) newest = st.mtimeMs;
+    } catch {
+      // missing/unreadable — ignore
+    }
+  };
+  await consider(session.path);
+  const subagentsDir = path.join(path.dirname(session.path), session.id, "subagents");
+  try {
+    for (const f of await fs.readdir(subagentsDir)) {
+      if (f.endsWith(".jsonl")) await consider(path.join(subagentsDir, f));
+    }
+  } catch {
+    // no subagents — fine
+  }
+  return newest;
+}
+
 function inWindow(ts: string | null, window?: TimeWindow): boolean {
   if (!window || !ts) return true;
   if (window.start && ts < window.start) return false;
@@ -130,7 +173,27 @@ export function createClaudeCodeProvider(
       return refs;
     },
 
-    async getUsage(session: SessionRef, window?: TimeWindow): Promise<SessionUsage> {
+    async getUsage(session: SessionRef, opts?: GetUsageOptions): Promise<SessionUsage> {
+      // Skip the O(file-size) read when nothing changed since the last stamp:
+      // an unchanged transcript has zero delta by construction. Only the stamp
+      // path passes `since`; read-only callers get full totals.
+      if (opts?.since) {
+        const sinceMs = Date.parse(opts.since);
+        if (!Number.isNaN(sinceMs)) {
+          const mtime = await newestSessionMtimeMs(session);
+          if (mtime !== null && mtime <= sinceMs - MTIME_SKIP_GUARD_MS) {
+            return {
+              sessionId: session.id,
+              provider: PROVIDER_ID,
+              perModel: [],
+              firstTs: "",
+              lastTs: "",
+            };
+          }
+        }
+      }
+
+      const window = opts?.window;
       const byMessageId = new Map<string, MessageUsage>();
       await parseTranscriptFile(session.path, byMessageId);
 

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
+  GetUsageOptions,
   ModelUsage,
   SessionRef,
   SessionUsage,
@@ -219,14 +220,17 @@ export function createCopilotCliProvider(
       return refs;
     },
 
-    async getUsage(session: SessionRef, window?: TimeWindow): Promise<SessionUsage> {
+    async getUsage(session: SessionRef, opts?: GetUsageOptions): Promise<SessionUsage> {
+      // No mtime-skip here: a live session's usage can grow in the central
+      // session-store.db without touching events.jsonl, so the transcript's
+      // mtime is not a reliable "unchanged" signal. `opts.since` is ignored.
       let content = "";
       try {
         content = await fs.readFile(path.join(session.path, "events.jsonl"), "utf8");
       } catch {
         // missing/unreadable events — DB may still know the session
       }
-      const parsed = parseEvents(content, window);
+      const parsed = parseEvents(content, opts?.window);
 
       let byModel: Map<string, RawCounts> | null = parsed.shutdown;
       if (!byModel) byModel = queryStoreDb(storeDb, session.id);
