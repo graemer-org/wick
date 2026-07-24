@@ -32,7 +32,7 @@ describe("claude-code provider", () => {
     const provider = createClaudeCodeProvider({ claudeDir });
 
     // Act
-    const [sessionRef] = await provider.discoverSessions(repoRoot, {});
+    const [sessionRef] = await provider.discoverSessions(repoRoot);
     const usage = await provider.getUsage(sessionRef);
 
     // Assert
@@ -59,7 +59,7 @@ describe("claude-code provider", () => {
     const provider = createClaudeCodeProvider({ claudeDir });
 
     // Act
-    const [sessionRef] = await provider.discoverSessions(repoRoot, {});
+    const [sessionRef] = await provider.discoverSessions(repoRoot);
     const usage = await provider.getUsage(sessionRef);
 
     // Assert
@@ -88,7 +88,7 @@ describe("claude-code provider", () => {
     const provider = createClaudeCodeProvider({ claudeDir });
 
     // Act
-    const [sessionRef] = await provider.discoverSessions(repoRoot, {});
+    const [sessionRef] = await provider.discoverSessions(repoRoot);
     const usage = await provider.getUsage(sessionRef);
 
     // Assert
@@ -118,7 +118,7 @@ describe("claude-code provider", () => {
     const provider = createClaudeCodeProvider({ claudeDir });
 
     // Act
-    const [sessionRef] = await provider.discoverSessions(repoRoot, {});
+    const [sessionRef] = await provider.discoverSessions(repoRoot);
     const usage = await provider.getUsage(sessionRef);
 
     // Assert
@@ -142,7 +142,7 @@ describe("claude-code provider", () => {
     const transcriptMtime = new Date("2026-07-01T00:00:00.000Z");
     utimesSync(transcriptPath, transcriptMtime, transcriptMtime);
     const provider = createClaudeCodeProvider({ claudeDir });
-    const [sessionRef] = await provider.discoverSessions(repoRoot, {});
+    const [sessionRef] = await provider.discoverSessions(repoRoot);
 
     // Act — stamp path passes a cutoff AFTER the transcript's mtime.
     const usage = await provider.getUsage(sessionRef, { since: "2026-07-02T00:00:00.000Z" });
@@ -169,7 +169,7 @@ describe("claude-code provider", () => {
     const transcriptMtime = new Date("2026-07-03T00:00:00.000Z");
     utimesSync(transcriptPath, transcriptMtime, transcriptMtime);
     const provider = createClaudeCodeProvider({ claudeDir });
-    const [sessionRef] = await provider.discoverSessions(repoRoot, {});
+    const [sessionRef] = await provider.discoverSessions(repoRoot);
 
     // Act — cutoff predates the transcript's mtime.
     const usage = await provider.getUsage(sessionRef, { since: "2026-07-02T00:00:00.000Z" });
@@ -200,7 +200,7 @@ describe("claude-code provider", () => {
     const fresh = new Date("2026-07-03T00:00:00.000Z");
     utimesSync(subagentPath, fresh, fresh);
     const provider = createClaudeCodeProvider({ claudeDir });
-    const [sessionRef] = await provider.discoverSessions(repoRoot, {});
+    const [sessionRef] = await provider.discoverSessions(repoRoot);
 
     // Act — cutoff sits between the two mtimes.
     const usage = await provider.getUsage(sessionRef, { since: "2026-07-02T00:00:00.000Z" });
@@ -215,7 +215,7 @@ describe("claude-code provider", () => {
     const provider = createClaudeCodeProvider({ claudeDir });
 
     // Act
-    const refs = await provider.discoverSessions("/nowhere", {});
+    const refs = await provider.discoverSessions("/nowhere");
 
     // Assert
     expect(refs).toEqual([]);
@@ -235,7 +235,7 @@ describe("claude-code provider", () => {
     const provider = createClaudeCodeProvider({ claudeDir });
 
     // Act
-    const refs = await provider.discoverSessions(repoRoot, {});
+    const refs = await provider.discoverSessions(repoRoot);
 
     // Assert
     expect(refs).toHaveLength(1);

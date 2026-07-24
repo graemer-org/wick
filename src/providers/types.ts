@@ -3,13 +3,6 @@
  * only these shapes — no provider-specific imports are allowed elsewhere.
  */
 
-export interface TimeWindow {
-  /** ISO timestamp, inclusive lower bound. Omit for "since forever". */
-  start?: string;
-  /** ISO timestamp, inclusive upper bound. Omit for "until now". */
-  end?: string;
-}
-
 export interface SessionRef {
   /** Stable session identifier (e.g. the transcript's session UUID). */
   id: string;
@@ -36,8 +29,6 @@ export interface SessionUsage {
 }
 
 export interface GetUsageOptions {
-  /** Optional time window (legacy; the delta path never passes one). */
-  window?: TimeWindow;
   /**
    * ISO mtime cutoff. A provider MAY skip re-reading a session whose transcript
    * has not changed since this instant and return empty usage instead — an
@@ -54,31 +45,13 @@ export interface GetUsageOptions {
 
 export interface UsageProvider {
   readonly id: string;
-  /** Sessions that touched this repo within the given time window. */
-  discoverSessions(repoRoot: string, window: TimeWindow): Promise<SessionRef[]>;
+  /** Sessions whose transcripts touched this repo. */
+  discoverSessions(repoRoot: string): Promise<SessionRef[]>;
   /** Deduped, per-model token usage for one session. */
   getUsage(session: SessionRef, opts?: GetUsageOptions): Promise<SessionUsage>;
 }
 
-const registry: UsageProvider[] = [];
-
-export function registerProvider(provider: UsageProvider): void {
-  if (!registry.some((p) => p.id === provider.id)) {
-    registry.push(provider);
-  }
-}
-
-export function getProviders(): readonly UsageProvider[] {
-  return registry;
-}
-
-/** Test helper: reset the registry. */
-export function clearProviders(): void {
-  registry.length = 0;
-}
-
 export interface CollectOptions {
-  window?: TimeWindow;
   /** Passed to each provider's getUsage to skip unchanged transcripts (stamp path). */
   since?: string;
   onError?: (providerId: string, err: unknown) => void;
@@ -97,23 +70,26 @@ export interface CollectResult {
 }
 
 /**
- * Collect current cumulative usage for all sessions of all registered
- * providers that touched this repo. A provider that fails never throws into
- * the hook path — its error is swallowed (optionally reported via onError).
+ * Collect current cumulative usage for all sessions of the given providers that
+ * touched this repo. Providers are passed in explicitly (no process-global
+ * registry) so one process can serve several repos/tenants concurrently. A
+ * provider that fails never throws into the hook path — its error is swallowed
+ * (optionally reported via onError).
  */
 export async function collectUsage(
+  providers: readonly UsageProvider[],
   repoRoot: string,
   opts: CollectOptions = {},
 ): Promise<CollectResult> {
   const usage: SessionUsage[] = [];
   const discovered: SessionRef[] = [];
-  for (const provider of getProviders()) {
+  for (const provider of providers) {
     try {
-      const refs = await provider.discoverSessions(repoRoot, opts.window ?? {});
+      const refs = await provider.discoverSessions(repoRoot);
       for (const ref of refs) {
         discovered.push(ref);
         try {
-          usage.push(await provider.getUsage(ref, { window: opts.window, since: opts.since }));
+          usage.push(await provider.getUsage(ref, { since: opts.since }));
         } catch (err) {
           opts.onError?.(provider.id, err);
         }

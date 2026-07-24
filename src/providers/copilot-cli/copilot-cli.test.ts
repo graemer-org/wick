@@ -13,7 +13,7 @@ describe("copilot-cli provider", () => {
     const provider = createCopilotCliProvider({ copilotDir });
 
     // Act
-    const refs = await provider.discoverSessions(repoPath, {});
+    const refs = await provider.discoverSessions(repoPath);
 
     // Assert
     expect(refs).toHaveLength(1);
@@ -30,15 +30,15 @@ describe("copilot-cli provider", () => {
     const emptyProvider = createCopilotCliProvider({ copilotDir: "/nonexistent/copilot" });
 
     // Act + Assert — neither the mismatched session nor a missing dir yields refs.
-    expect(await provider.discoverSessions(repoPath, {})).toHaveLength(0);
-    expect(await emptyProvider.discoverSessions(repoPath, {})).toHaveLength(0);
+    expect(await provider.discoverSessions(repoPath)).toHaveLength(0);
+    expect(await emptyProvider.discoverSessions(repoPath)).toHaveLength(0);
   });
 
   it("reads full usage from session.shutdown and subtracts cache reads from input", async () => {
     // Arrange
     const { copilotDir, repoPath } = TestFactory.makeCopilotSession({ closed: true });
     const provider = createCopilotCliProvider({ copilotDir });
-    const [sessionRef] = await provider.discoverSessions(repoPath, {});
+    const [sessionRef] = await provider.discoverSessions(repoPath);
 
     // Act
     const usage = await provider.getUsage(sessionRef);
@@ -60,7 +60,7 @@ describe("copilot-cli provider", () => {
     // Arrange — session has no shutdown event and no session-store rows.
     const { copilotDir, repoPath } = TestFactory.makeCopilotSession({ closed: false });
     const provider = createCopilotCliProvider({ copilotDir });
-    const [sessionRef] = await provider.discoverSessions(repoPath, {});
+    const [sessionRef] = await provider.discoverSessions(repoPath);
 
     // Act
     const usage = await provider.getUsage(sessionRef);
@@ -99,7 +99,7 @@ describe("copilot-cli provider", () => {
            ('other-session', 'claude-opus-4.8', 999, 99, 0, 0);`,
       ]);
       const provider = createCopilotCliProvider({ copilotDir });
-      const [sessionRef] = await provider.discoverSessions(repoPath, {});
+      const [sessionRef] = await provider.discoverSessions(repoPath);
 
       // Act
       const usage = await provider.getUsage(sessionRef);

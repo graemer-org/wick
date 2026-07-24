@@ -146,7 +146,7 @@ export const TestFactory = {
   makeMockProvider(providerId: string, totals: MutableOutputTotals): UsageProvider {
     return {
       id: providerId,
-      async discoverSessions(_repoRoot, _window) {
+      async discoverSessions(_repoRoot) {
         return [{ id: "mock-session-1", provider: providerId, path: "/dev/null" }];
       },
       async getUsage(sessionRef): Promise<SessionUsage> {
