@@ -1,4 +1,5 @@
 import { collectUsage } from "../providers/types.js";
+import type { Wick } from "../wick.js";
 import { computeDelta } from "../attribution.js";
 import { remapNotes, syncNotesToRemote, upsertNote } from "../notes.js";
 import { loadState, saveState, withLock } from "../state.js";
@@ -11,7 +12,7 @@ import { repoRoot, tryGit } from "../git.js";
  */
 
 /** Stamp `commit` with the token delta since the last stamp. */
-export async function postCommit(cwd: string, commit?: string): Promise<void> {
+export async function postCommit(wick: Wick, cwd: string, commit?: string): Promise<void> {
   const root = repoRoot(cwd);
   const target = commit ?? tryGit(["rev-parse", "HEAD"], cwd);
   if (!target) return;
@@ -22,12 +23,17 @@ export async function postCommit(cwd: string, commit?: string): Promise<void> {
     // read carries an mtime past `stampTs`, so it is re-read next commit and no
     // delta is lost (see GetUsageOptions.since).
     const stampTs = new Date().toISOString();
-    // Deltas are computed against CUMULATIVE session totals — do not pass a
-    // time window here, or windowed totals get compared against cumulative
-    // baselines and every delta collapses to zero. `since` only lets providers
-    // skip UNCHANGED transcripts (zero delta), never bounds the totals.
-    const { usage, discovered } = await collectUsage(root, {
+    // Deltas are computed against CUMULATIVE session totals; `since` only lets
+    // providers skip UNCHANGED transcripts (zero delta), it never bounds the
+    // totals. A provider that throws here must not silently lose a PR's cost —
+    // surface it as a stderr warning (the hook still exits 0 via the CLI wrapper).
+    const { usage, discovered } = await collectUsage(wick.providers, root, {
       since: state.lastStampTs ?? undefined,
+      onError: (providerId, err) =>
+        console.error(
+          `wick: warning: provider ${providerId} failed while collecting usage: ` +
+            `${err instanceof Error ? err.message : err}`,
+        ),
     });
     const { stamps, newState } = computeDelta(usage, state, stampTs, discovered);
     if (stamps.length > 0) {
@@ -64,8 +70,8 @@ export async function postRewrite(cwd: string, pairs: string): Promise<void> {
  * A merge creates a commit without firing post-commit, so treat it like one:
  * stamp the merge commit with the delta and refresh the baselines.
  */
-export async function postMerge(cwd: string): Promise<void> {
-  await postCommit(cwd);
+export async function postMerge(wick: Wick, cwd: string): Promise<void> {
+  await postCommit(wick, cwd);
 }
 
 /**

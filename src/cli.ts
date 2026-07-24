@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
-import { registerProvider, getProviders, collectUsage } from "./providers/types.js";
-import { createClaudeCodeProvider } from "./providers/claude-code/index.js";
-import { createCopilotCliProvider } from "./providers/copilot-cli/index.js";
+import { collectUsage } from "./providers/types.js";
+import { defaultProviders } from "./providers/index.js";
+import { createWick } from "./wick.js";
 import { install, uninstall, hasWickBlock, HOOK_EVENTS } from "./install.js";
 import { postCommit, postMerge, postRewrite, prePush } from "./hooks/index.js";
 import {
@@ -19,8 +19,9 @@ import { notesRemote, repoRoot, tryGit } from "./git.js";
 import { loadState } from "./state.js";
 import { NOTES_REF, syncNotesFromRemote } from "./notes.js";
 
-registerProvider(createClaudeCodeProvider());
-registerProvider(createCopilotCliProvider());
+// The CLI is a composition root: it builds one Wick context with the shipped
+// providers and threads it into the stamp/usage paths (no module-global registry).
+const wick = createWick(defaultProviders());
 
 // dist/cli.js -> ../package.json (package root); keeps --version in sync
 // with release-please bumps.
@@ -75,13 +76,22 @@ program
     }
     const state = await loadState(root);
     console.log(`last stamp: ${state.lastStampTs ?? "never"}`);
-    for (const provider of getProviders()) {
-      try {
-        const refs = await provider.discoverSessions(root);
-        console.log(`provider ${provider.id}: ${refs.length} session(s) found`);
-      } catch {
-        console.log(`provider ${provider.id}: error while discovering sessions`);
-      }
+    // Route discovery through the SAME collectUsage the stamp path uses, so
+    // status can't drift from what stamping actually sees.
+    const errored = new Set<string>();
+    const { discovered } = await collectUsage(wick.providers, root, {
+      onError: (providerId) => errored.add(providerId),
+    });
+    const sessionCounts = new Map<string, number>();
+    for (const ref of discovered) {
+      sessionCounts.set(ref.provider, (sessionCounts.get(ref.provider) ?? 0) + 1);
+    }
+    for (const provider of wick.providers) {
+      console.log(
+        errored.has(provider.id)
+          ? `provider ${provider.id}: error while collecting usage`
+          : `provider ${provider.id}: ${sessionCounts.get(provider.id) ?? 0} session(s) found`,
+      );
     }
     const noteCount = tryGit(
       ["notes", `--ref=${NOTES_REF}`, "list"],
@@ -157,7 +167,7 @@ program
     }
     // Read-only: collect current cumulative usage and price it. No delta, no
     // note write, no state mutation — this must not disturb the stamp baselines.
-    const { usage } = await collectUsage(root, {});
+    const { usage } = await collectUsage(wick.providers, root, {});
     const summary = summarizeCost(usage, loadPricing(root));
     const out = formatCostOutput(summary, opts.json === true);
     console.log(out.stdout);
@@ -231,11 +241,11 @@ program
     try {
       const cwd = process.cwd();
       if (event === "post-commit") {
-        await postCommit(cwd, opts.commit);
+        await postCommit(wick, cwd, opts.commit);
       } else if (event === "post-rewrite") {
         await postRewrite(cwd, opts.pairs ?? "");
       } else if (event === "post-merge") {
-        await postMerge(cwd);
+        await postMerge(wick, cwd);
       } else if (event === "pre-push") {
         await prePush(cwd, opts.remote ?? "");
       }
