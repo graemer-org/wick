@@ -1,4 +1,5 @@
 import { collectUsage } from "../providers/types.js";
+import type { Wick } from "../wick.js";
 import { computeDelta } from "../attribution.js";
 import { remapNotes, syncNotesToRemote, upsertNote } from "../notes.js";
 import { loadState, saveState, withLock } from "../state.js";
@@ -11,7 +12,7 @@ import { repoRoot, tryGit } from "../git.js";
  */
 
 /** Stamp `commit` with the token delta since the last stamp. */
-export async function postCommit(cwd: string, commit?: string): Promise<void> {
+export async function postCommit(wick: Wick, cwd: string, commit?: string): Promise<void> {
   const root = repoRoot(cwd);
   const target = commit ?? tryGit(["rev-parse", "HEAD"], cwd);
   if (!target) return;
@@ -26,7 +27,7 @@ export async function postCommit(cwd: string, commit?: string): Promise<void> {
     // providers skip UNCHANGED transcripts (zero delta), it never bounds the
     // totals. A provider that throws here must not silently lose a PR's cost —
     // surface it as a stderr warning (the hook still exits 0 via the CLI wrapper).
-    const { usage, discovered } = await collectUsage(root, {
+    const { usage, discovered } = await collectUsage(wick.providers, root, {
       since: state.lastStampTs ?? undefined,
       onError: (providerId, err) =>
         console.error(
@@ -69,8 +70,8 @@ export async function postRewrite(cwd: string, pairs: string): Promise<void> {
  * A merge creates a commit without firing post-commit, so treat it like one:
  * stamp the merge commit with the delta and refresh the baselines.
  */
-export async function postMerge(cwd: string): Promise<void> {
-  await postCommit(cwd);
+export async function postMerge(wick: Wick, cwd: string): Promise<void> {
+  await postCommit(wick, cwd);
 }
 
 /**
