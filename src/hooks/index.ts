@@ -2,6 +2,7 @@ import { collectUsage } from "../providers/types.js";
 import type { Wick } from "../wick.js";
 import { computeDelta } from "../attribution.js";
 import { remapNotes, syncNotesToRemote, upsertNote } from "../notes.js";
+import { syncRollupToRemote } from "../rollup.js";
 import { loadState, saveState, withLock } from "../state.js";
 import { repoRoot, tryGit } from "../git.js";
 
@@ -88,4 +89,8 @@ export async function prePush(cwd: string, remote: string): Promise<void> {
         `stamps stay local until the next push (manual: git push ${remote} refs/notes/wick)`,
     );
   }
+  // Best-effort: carry the report rollup along so a fresh checkout reads the
+  // precomputed aggregate instead of rebuilding it. A no-op if nothing has run
+  // `wick report`/`badge` locally yet; never fails the push.
+  syncRollupToRemote(remote, root);
 }
