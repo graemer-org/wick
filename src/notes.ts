@@ -14,13 +14,8 @@ function gitNotes(args: string[], cwd: string): string {
   }).trim();
 }
 
-export function readNote(commit: string, cwd: string): NoteData | null {
-  let raw: string;
-  try {
-    raw = gitNotes(["show", commit], cwd);
-  } catch {
-    return null; // no note on this commit
-  }
+/** Parse a raw note blob, returning null for malformed JSON (treated as absent). */
+function parseNote(raw: string): NoteData | null {
   try {
     const data = JSON.parse(raw);
     if (data && data.v === 1 && Array.isArray(data.sessions)) return data;
@@ -28,6 +23,87 @@ export function readNote(commit: string, cwd: string): NoteData | null {
     // malformed note — treat as absent
   }
   return null;
+}
+
+export function readNote(commit: string, cwd: string): NoteData | null {
+  let raw: string;
+  try {
+    raw = gitNotes(["show", commit], cwd);
+  } catch {
+    return null; // no note on this commit
+  }
+  return parseNote(raw);
+}
+
+/**
+ * Resolve many git object shas to their contents in ONE `git cat-file --batch`
+ * (shas on stdin, `<sha> <type> <size>\n<payload>\n` per object on stdout, or
+ * `<sha> missing\n` with no payload). Parsed off a Buffer, not a decoded
+ * string: a note payload can contain newlines, so the record boundary is the
+ * declared byte size, not a line break. Returns echoed-sha → payload.
+ */
+function batchCatBlobs(shas: string[], cwd: string): Map<string, string> {
+  const out = new Map<string, string>();
+  if (shas.length === 0) return out;
+  let stdout: Buffer;
+  try {
+    stdout = execFileSync("git", ["cat-file", "--batch"], {
+      cwd,
+      input: shas.join("\n") + "\n",
+      stdio: ["pipe", "pipe", "ignore"],
+      maxBuffer: 256 * 1024 * 1024,
+    });
+  } catch {
+    return out;
+  }
+  let pos = 0;
+  while (pos < stdout.length) {
+    const nl = stdout.indexOf(0x0a, pos);
+    if (nl === -1) break;
+    const header = stdout.toString("utf8", pos, nl);
+    pos = nl + 1;
+    const [sha, , sizeStr] = header.split(" ");
+    // "<sha> missing" (or any header without a size) → no payload follows.
+    const size = Number(sizeStr);
+    if (!sizeStr || !Number.isInteger(size)) continue;
+    out.set(sha, stdout.toString("utf8", pos, pos + size));
+    pos += size + 1; // payload + its trailing newline
+  }
+  return out;
+}
+
+/**
+ * Read every note on `ref` in a constant number of git spawns, regardless of
+ * how many commits are annotated. `readNote`-in-a-loop shells out one
+ * `git notes show` per commit — on a full-history report/badge that is one
+ * spawn per commit in the whole repo to read a handful of actual notes (#39).
+ * This collapses it to two spawns: `git notes list` for the
+ * `<noteBlobSha> <commitSha>` pairs, then one `git cat-file --batch` over the
+ * note blobs. Malformed notes are skipped, exactly as `readNote` treats them.
+ * Returns commitSha → NoteData for every commit carrying a valid note.
+ */
+export function readAllNotes(cwd: string, ref: string = NOTES_REF): Map<string, NoteData> {
+  const notes = new Map<string, NoteData>();
+  const listing = tryRun(["notes", `--ref=${ref}`, "list"], cwd);
+  if (!listing) return notes; // ref missing or no notes on it
+
+  const pairs: Array<[noteSha: string, commitSha: string]> = [];
+  for (const line of listing.split("\n")) {
+    const [noteSha, commitSha] = line.trim().split(/\s+/);
+    if (noteSha && commitSha) pairs.push([noteSha, commitSha]);
+  }
+
+  const blobs = batchCatBlobs(
+    pairs.map(([noteSha]) => noteSha),
+    cwd,
+  );
+  for (const [noteSha, commitSha] of pairs) {
+    const raw = blobs.get(noteSha);
+    if (raw === undefined) continue;
+    const data = parseNote(raw);
+    if (data) notes.set(commitSha, data);
+  }
+  return notes;
 }
 
 export function writeNote(commit: string, data: NoteData, cwd: string): void {
@@ -61,20 +137,12 @@ function tryRun(args: string[], cwd: string): string | null {
  * strategies either drop one side or corrupt the JSON, so we do it ourselves.
  */
 function mergeRefIntoLocalNotes(sourceRef: string, cwd: string): void {
-  const listing = tryRun(["notes", `--ref=${sourceRef}`, "list"], cwd) ?? "";
-  for (const line of listing.split("\n")) {
-    const [noteSha, commitSha] = line.trim().split(/\s+/);
-    if (!noteSha || !commitSha) continue;
-    const raw = tryRun(["cat-file", "-p", noteSha], cwd);
-    if (!raw) continue;
-    let sourceNote: NoteData;
-    try {
-      sourceNote = JSON.parse(raw);
-      if (!sourceNote || sourceNote.v !== 1 || !Array.isArray(sourceNote.sessions)) continue;
-    } catch {
-      continue; // malformed source note — leave local as-is
-    }
-    const localNote = readNote(commitSha, cwd);
+  // Load both refs in a constant number of spawns (two each) instead of
+  // 2-3 per source note; only the notes that actually differ are written back.
+  const sourceNotes = readAllNotes(cwd, sourceRef);
+  const localNotes = readAllNotes(cwd, NOTES_REF);
+  for (const [commitSha, sourceNote] of sourceNotes) {
+    const localNote = localNotes.get(commitSha);
     if (!localNote) {
       writeNote(commitSha, sourceNote, cwd);
     } else if (JSON.stringify(localNote) !== JSON.stringify(sourceNote)) {
