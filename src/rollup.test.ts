@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildReport } from "./report.js";
 import { writeNote } from "./notes.js";
-import { readRollup, ROLLUP_REF, syncRollupFromRemote, syncRollupToRemote } from "./rollup.js";
+import { readRollup, ROLLUP_REF, syncRollupFromRemote, syncRollupToRemote, writeRollup } from "./rollup.js";
 import { TestFactory } from "./test-factory.js";
 
 /**
@@ -87,6 +87,52 @@ describe("rollup incremental update", () => {
     expect(incremental.totals.stampedCommits).toBe(2);
   });
 
+  it("matches the per-commit oracle when the delta adds a new and an existing author", async () => {
+    // Arrange — a rollup already folded over one Alice commit.
+    const repoPath = TestFactory.makeRepo();
+    const alice = { name: "Alice", email: "alice@example.com" };
+    const bob = { name: "Bob", email: "bob@example.com" };
+    const a1 = TestFactory.makeCommit(repoPath, "alice one", alice);
+    writeNote(a1, TestFactory.makeSessionNote({ id: "sA1", model: "claude-opus-4-8", output: 100 }), repoPath);
+    await buildReport(repoPath);
+
+    // Act — the incremental delta introduces a brand-new author (Bob) AND a
+    // second commit from the already-counted author (Alice); exercises both the
+    // create-bucket and merge-into-existing-bucket branches of mergeAggInto.
+    const b1 = TestFactory.makeCommit(repoPath, "bob one", bob);
+    writeNote(b1, TestFactory.makeSessionNote({ id: "sB1", model: "claude-opus-4-8", output: 300 }), repoPath);
+    const a2 = TestFactory.makeCommit(repoPath, "alice two", alice);
+    writeNote(a2, TestFactory.makeSessionNote({ id: "sA2", model: "claude-opus-4-8", output: 70 }), repoPath);
+    const incremental = await buildReport(repoPath);
+    const oracle = await buildReport(repoPath, `${rootCommit(repoPath)}..HEAD`);
+
+    // Assert — the incrementally-built aggregate equals the trusted per-commit
+    // report over the same commits (a stronger oracle than a rollup rebuild).
+    expect(incremental.totals.tokens).toEqual(oracle.totals.tokens);
+    expect(incremental.totals.costUsd).toEqual(oracle.totals.costUsd);
+    expect(incremental.totals.sessions).toBe(oracle.totals.sessions);
+    expect(authorRows(incremental)).toEqual(authorRows(oracle));
+    expect(incremental.authors).toHaveLength(2);
+  });
+
+  it("merges an unknown model introduced only in the incremental delta", async () => {
+    // Arrange — a rollup over one priced-model commit (real claude-code pricing).
+    const repoPath = TestFactory.makeRepo();
+    const c1 = TestFactory.makeCommit(repoPath, "priced");
+    writeNote(c1, TestFactory.makeSessionNote({ id: "s1", provider: "claude-code", model: "claude-opus-4-8", output: 100 }), repoPath);
+    await buildReport(repoPath);
+
+    // Act — the new commit's note uses a model with no pricing.
+    const c2 = TestFactory.makeCommit(repoPath, "unpriced");
+    writeNote(c2, TestFactory.makeSessionNote({ id: "s2", provider: "claude-code", model: "no-such-model-x", output: 5 }), repoPath);
+    const report = await buildReport(repoPath);
+
+    // Assert — the unknown model surfaces, and the priced total stays a lower bound.
+    expect(report.unknownModels).toContain("claude-code/no-such-model-x");
+    expect(report.totals.costUsd).not.toBeNull();
+    expect(report.totals.costUsd).toBeGreaterThan(0);
+  });
+
   it("counts a session spanning the incremental boundary exactly once", async () => {
     // Arrange — session s1 stamped on the first commit, rollup built.
     const repoPath = TestFactory.makeRepo();
@@ -121,6 +167,71 @@ describe("rollup incremental update", () => {
 
     // Assert — the changed note is reflected (no stale cached total).
     expect(report.totals.tokens.output).toBe(1099);
+  });
+
+  it("recomputes when an old commit's note changes AND HEAD advances in the same run", async () => {
+    // Arrange — two stamped commits, rollup built.
+    const repoPath = TestFactory.makeRepo();
+    const first = TestFactory.makeCommit(repoPath, "first");
+    writeNote(first, TestFactory.makeSessionNote({ id: "s1", model: "claude-opus-4-8", output: 100 }), repoPath);
+    TestFactory.makeCommit(repoPath, "second");
+    writeNote(TestFactory.git(repoPath, "git", "rev-parse", "HEAD"), TestFactory.makeSessionNote({ id: "s2", model: "claude-opus-4-8", output: 100 }), repoPath);
+    await buildReport(repoPath);
+
+    // Act — HEAD advances (a new stamped commit) WHILE an already-counted
+    // commit's note also changes. The changed old note is outside the new
+    // range, so the `touchesCounted` guard must force a recompute, not an
+    // incremental fold that would trust the stale first-commit total.
+    const third = TestFactory.makeCommit(repoPath, "third");
+    writeNote(third, TestFactory.makeSessionNote({ id: "s3", model: "claude-opus-4-8", output: 50 }), repoPath);
+    writeNote(first, TestFactory.makeSessionNote({ id: "s1", model: "claude-opus-4-8", output: 999 }), repoPath);
+    const report = await buildReport(repoPath);
+
+    // Assert — every current note is reflected (999 + 100 + 50), not a stale sum.
+    expect(report.totals.tokens.output).toBe(1149);
+    expect(report.totals.stampedCommits).toBe(3);
+  });
+
+  it("recomputes to empty when the notes ref is deleted after a rollup exists", async () => {
+    // Arrange — a stamped repo whose rollup is built.
+    const repoPath = TestFactory.makeRepo();
+    const c = TestFactory.makeCommit(repoPath, "work");
+    writeNote(c, TestFactory.makeSessionNote({ id: "s1", model: "claude-opus-4-8", output: 100 }), repoPath);
+    await buildReport(repoPath);
+
+    // Act — the entire notes ref disappears (notes === null at report time).
+    TestFactory.git(repoPath, "git", "update-ref", "-d", "refs/notes/wick");
+    const report = await buildReport(repoPath);
+
+    // Assert — the stale note contribution is dropped, not carried forward.
+    expect(report.totals.stampedCommits).toBe(0);
+    expect(report.totals.tokens.output).toBe(0);
+  });
+
+  it("recomputes (never serves a stale total) when the prior notes state can't be diffed", async () => {
+    // Arrange — two stamped commits, rollup built at the real notes tip.
+    const repoPath = TestFactory.makeRepo();
+    const first = TestFactory.makeCommit(repoPath, "first");
+    writeNote(first, TestFactory.makeSessionNote({ id: "s1", model: "claude-opus-4-8", output: 100 }), repoPath);
+    const second = TestFactory.makeCommit(repoPath, "second");
+    writeNote(second, TestFactory.makeSessionNote({ id: "s2", model: "claude-opus-4-8", output: 200 }), repoPath);
+    await buildReport(repoPath);
+
+    // Point the cached rollup's `notes` at a sha that isn't in the object store
+    // (as if adopted from a remote whose notes history was pruned), so the
+    // incremental notes-diff will fail — while an already-counted commit's note
+    // changes underneath. HEAD is unchanged, so only the diff decides the path.
+    const rollup = readRollup(repoPath)!;
+    rollup.notes = "0000000000000000000000000000000000000000";
+    writeRollup(repoPath, rollup);
+    writeNote(first, TestFactory.makeSessionNote({ id: "s1", model: "claude-opus-4-8", output: 999 }), repoPath);
+
+    // Act
+    const report = await buildReport(repoPath);
+
+    // Assert — a failed diff must recompute (999 + 200), not fold incrementally
+    // over an unverified aggregate and re-cache the stale 300 under the new key.
+    expect(report.totals.tokens.output).toBe(1199);
   });
 
   it("recomputes when history is rewritten (non-fast-forward)", async () => {

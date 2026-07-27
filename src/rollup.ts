@@ -33,6 +33,11 @@ import type { AuthorReport, Report } from "./report.js";
 /** The pushed ref the rollup blob lives under. */
 export const ROLLUP_REF = "refs/wick/rollup";
 
+/** Read/write the rollup blob with the SAME generous buffer — an asymmetric
+ * limit would let a blob be written but not read back, silently degrading every
+ * report to a cold recompute. */
+const ROLLUP_MAXBUFFER = 512 * 1024 * 1024;
+
 /** US (0x1f) — separates fields in the `git log` format and map keys; never
  * appears in a sha, author name, or JSON note body. */
 const SEP = "\x1f";
@@ -189,11 +194,20 @@ function mergeAggInto(target: RollupAgg, src: RollupAgg): void {
   }
 }
 
-/** Commit shas whose note blob differs between two notes-ref states. */
-function notesChangedCommits(cwd: string, oldNotes: string, newNotes: string): Set<string> {
+/**
+ * Commit shas whose note blob differs between two notes-ref states, or `null`
+ * when the diff itself could not be computed (e.g. `oldNotes` is not present in
+ * the local object store — a rollup adopted from a remote whose notes history
+ * was rewritten/pruned). `null` MUST force a recompute, never be read as "no
+ * changes": treating an un-computable diff as empty would incrementally fold
+ * against an aggregate whose old notes were never verified and then re-cache
+ * that stale total under the *current* key, self-perpetuating a wrong number.
+ * Mirrors `isAncestor`'s fail-closed behaviour.
+ */
+function notesChangedCommits(cwd: string, oldNotes: string, newNotes: string): Set<string> | null {
   const out = tryGit(["diff", "--name-only", oldNotes, newNotes], cwd);
+  if (out === null) return null; // diff failed (missing object) — cannot reconcile cheaply
   const changed = new Set<string>();
-  if (!out) return changed;
   for (const path of out.split("\n")) {
     const sha = path.replace(/\//g, "").trim();
     if (sha) changed.add(sha);
@@ -226,15 +240,19 @@ export async function updateRollup(
   // through to a full recompute — correctness over a marginal speedup.
   if (prev && notes !== null && prev.notes !== "" && isAncestor(cwd, prev.head, head)) {
     const changed = notesChangedCommits(cwd, prev.notes, notes);
-    const newRange = rangeCommits(cwd, `${prev.head}..${head}`);
-    const newRangeSet = new Set(newRange);
-    const touchesCounted = [...changed].some((sha) => !newRangeSet.has(sha));
-    if (!touchesCounted) {
-      const delta = emptyAgg();
-      await walkAndFold(cwd, [`${prev.head}..${head}`], delta);
-      const agg = cloneAgg(prev.agg);
-      mergeAggInto(agg, delta);
-      return { head, notes: notes ?? "", commitCount: prev.commitCount + newRange.length, agg };
+    if (changed !== null) {
+      const newRange = rangeCommits(cwd, `${prev.head}..${head}`);
+      const newRangeSet = new Set(newRange);
+      const touchesCounted = [...changed].some((sha) => !newRangeSet.has(sha));
+      if (!touchesCounted) {
+        const delta = emptyAgg();
+        await walkAndFold(cwd, [`${prev.head}..${head}`], delta);
+        // `prev` is a throwaway parse from readRollup, held by no one else, so
+        // fold the delta into it in place rather than cloning (one fewer
+        // O(sessions) pass).
+        mergeAggInto(prev.agg, delta);
+        return { head, notes, commitCount: prev.commitCount + newRange.length, agg: prev.agg };
+      }
     }
   }
 
@@ -264,17 +282,21 @@ function rangeCommits(cwd: string, range: string): string[] {
   return out ? out.split("\n").filter(Boolean) : [];
 }
 
-function cloneAgg(agg: RollupAgg): RollupAgg {
-  const copy = emptyAgg();
-  mergeAggInto(copy, agg);
-  return copy;
-}
-
 // ---------------------------------------------------------------- persistence
 
 /** Read the rollup blob from the local ref, or null when absent/unparseable. */
 export function readRollup(cwd: string): Rollup | null {
-  const blob = tryGit(["cat-file", "-p", ROLLUP_REF], cwd);
+  let blob: string;
+  try {
+    blob = execFileSync("git", ["cat-file", "-p", ROLLUP_REF], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: ROLLUP_MAXBUFFER,
+    }).trim();
+  } catch {
+    return null; // ref absent or unreadable → caller recomputes
+  }
   if (!blob) return null;
   return deserializeRollup(blob);
 }
@@ -320,7 +342,7 @@ export function writeRollup(cwd: string, rollup: Rollup): void {
       cwd,
       input: serializeRollup(rollup),
       encoding: "utf8",
-      maxBuffer: 256 * 1024 * 1024,
+      maxBuffer: ROLLUP_MAXBUFFER,
     }).trim();
   } catch {
     return; // best-effort cache write — a failure just means a recompute next run
@@ -377,7 +399,19 @@ function deserializeRollup(blob: string): Rollup | null {
   } catch {
     return null;
   }
-  if (!parsed || parsed.v !== 1 || typeof parsed.head !== "string") return null;
+  if (
+    !parsed ||
+    parsed.v !== 1 ||
+    typeof parsed.head !== "string" ||
+    typeof parsed.perModel !== "object" ||
+    typeof parsed.byAuthor !== "object" ||
+    !Array.isArray(parsed.sessions)
+  ) {
+    // A structurally-incomplete-but-valid-JSON blob (e.g. a truncated write)
+    // would otherwise be trusted verbatim under a matching (head, notes) key —
+    // reject it so the caller recomputes instead of serving a partial total.
+    return null;
+  }
   const agg = emptyAgg();
   agg.stampedCommits = parsed.stampedCommits ?? 0;
   for (const [key, t] of Object.entries(parsed.perModel ?? {})) agg.perModel.set(key, { ...t });
