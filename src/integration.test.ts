@@ -114,7 +114,7 @@ describe("attribution end-to-end (mock provider = provider isolation)", () => {
     expect(secondNote!.sessions[0].output).toBe(160);
 
     // Act + Assert — report aggregates both commits; unknown model → cost n/a.
-    const report = buildReport(repoPath, "HEAD~2..HEAD");
+    const report = await buildReport(repoPath, "HEAD~2..HEAD");
     expect(report.totals.tokens.output).toBe(260);
     expect(report.totals.sessions).toBe(1);
     expect(report.commits.every((commitReport) => commitReport.costUsd === null)).toBe(true);
@@ -292,7 +292,7 @@ describe("report ranges", () => {
     await postCommit(wick, repoPath, branchCommit);
 
     // Act — default range: merge-base(main, HEAD)..HEAD
-    const report = buildReport(repoPath);
+    const report = await buildReport(repoPath);
 
     // Assert — parent-branch costs excluded.
     expect(report.commits).toHaveLength(1);
@@ -315,7 +315,7 @@ describe("report ranges", () => {
     await postCommit(wick, repoPath, moreAliceCommit);
 
     // Act
-    const report = buildReport(repoPath, "HEAD~3..HEAD");
+    const report = await buildReport(repoPath, "HEAD~3..HEAD");
 
     // Assert
     expect(report.authors).toHaveLength(2);
@@ -347,7 +347,7 @@ describe("report ranges", () => {
     );
 
     // Act
-    const report = buildReport(repoPath, "HEAD~2..HEAD");
+    const report = await buildReport(repoPath, "HEAD~2..HEAD");
 
     // Assert
     expect(report.authors).toHaveLength(1);
@@ -364,27 +364,27 @@ describe("report ranges", () => {
     await postCommit(wick, repoPath, onlyCommit);
 
     // Act
-    const report = buildReport(repoPath);
+    const report = await buildReport(repoPath);
 
     // Assert
     expect(report.range).toBe("HEAD");
     expect(report.totals.tokens.output).toBe(10);
   });
 
-  it("throws on an explicit range git cannot resolve, instead of a silent empty report", () => {
+  it("throws on an explicit range git cannot resolve, instead of a silent empty report", async () => {
     // Arrange — a valid repo, but the caller typo'd the range.
     const repoPath = TestFactory.makeRepo();
 
     // Act + Assert — a bad ref is a user error, not "0 stamped commits".
-    expect(() => buildReport(repoPath, "mian..HEAD")).toThrow(/invalid revision range: mian\.\.HEAD/);
+    await expect(buildReport(repoPath, "mian..HEAD")).rejects.toThrow(/invalid revision range: mian\.\.HEAD/);
   });
 
-  it("reports an empty range as empty, not as an error", () => {
+  it("reports an empty range as empty, not as an error", async () => {
     // Arrange
     const repoPath = TestFactory.makeRepo();
 
     // Act — a valid but empty range (no commits between HEAD and itself).
-    const report = buildReport(repoPath, "HEAD..HEAD");
+    const report = await buildReport(repoPath, "HEAD..HEAD");
 
     // Assert — empty is a legitimate report, distinct from a rejected range.
     expect(report.totals.stampedCommits).toBe(0);
@@ -393,7 +393,7 @@ describe("report ranges", () => {
 });
 
 describe("mixed known/unknown pricing stays reconcilable", () => {
-  it("surfaces a commit's known-model cost as a lower bound instead of nulling the row", () => {
+  it("surfaces a commit's known-model cost as a lower bound instead of nulling the row", async () => {
     // Arrange — one commit whose note mixes a priced model (Opus 4.8) and an
     // unpriced one. Nulling the whole row would bake the known partial into the
     // footer total while showing n/a in the row, so the visible rows would no
@@ -420,7 +420,7 @@ describe("mixed known/unknown pricing stays reconcilable", () => {
     );
 
     // Act
-    const report = buildReport(repoPath, "HEAD~1..HEAD");
+    const report = await buildReport(repoPath, "HEAD~1..HEAD");
 
     // Assert — the row shows the known partial ($5 = 1M input × Opus $5/1M), not
     // null, and equals the footer total; the unknown model is surfaced instead.
@@ -802,7 +802,7 @@ describe("multi-provider end-to-end (claude-code + copilot-cli on one repo)", ()
     const stampedCommit = TestFactory.makeCommit(repoPath, "work with two assistants");
     await postCommit(wick, repoPath, stampedCommit);
     const note = readNote(stampedCommit, repoPath);
-    const report = buildReport(repoPath, "HEAD~1..HEAD");
+    const report = await buildReport(repoPath, "HEAD~1..HEAD");
 
     // Assert — the note carries one session per provider with correct classes
     // (copilot input = 300 inclusive − 250 cached), and the report sums both.

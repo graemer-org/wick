@@ -18,6 +18,7 @@ import { loadPricing } from "./pricing.js";
 import { notesRemote, repoRoot, tryGit } from "./git.js";
 import { loadState } from "./state.js";
 import { NOTES_REF, syncNotesFromRemote } from "./notes.js";
+import { ROLLUP_REF, syncRollupFromRemote } from "./rollup.js";
 
 // The CLI is a composition root: it builds one Wick context with the shipped
 // providers and threads it into the stamp/usage paths (no module-global registry).
@@ -108,7 +109,7 @@ program
   .option("--json", "machine-readable output")
   .option("--no-color", "disable ANSI colors")
   .option("--no-fetch", "skip auto-fetching refs/notes/wick from the remote")
-  .action((range: string | undefined, opts: { json?: boolean; color?: boolean; fetch?: boolean }) => {
+  .action(async (range: string | undefined, opts: { json?: boolean; color?: boolean; fetch?: boolean }) => {
     const cwd = process.cwd();
     // Notes don't travel with a normal clone/fetch, so a fresh checkout would
     // show 0 stamps. Pull them first (non-destructive merge); best-effort and
@@ -117,14 +118,21 @@ program
       try {
         const root = repoRoot(cwd);
         const remote = notesRemote(root);
-        if (remote && syncNotesFromRemote(remote, root) === "updated" && !opts.json) {
-          console.error(`wick: fetched refs/notes/wick from ${remote}`);
+        if (remote) {
+          if (syncNotesFromRemote(remote, root) === "updated" && !opts.json) {
+            console.error(`wick: fetched refs/notes/wick from ${remote}`);
+          }
+          // Adopt a precomputed rollup on a fresh checkout so the full-history
+          // report is O(Δ), not a cold rebuild. Never clobbers a local rollup.
+          if (syncRollupFromRemote(remote, root) === "updated" && !opts.json) {
+            console.error(`wick: fetched ${ROLLUP_REF} from ${remote}`);
+          }
         }
       } catch {
         // not a repo / git unavailable — let buildReport surface the real error
       }
     }
-    const report = buildReport(cwd, range);
+    const report = await buildReport(cwd, range);
     if (opts.json) {
       console.log(JSON.stringify(report, null, 2));
     } else {
@@ -144,8 +152,8 @@ program
   .argument("[range]", "git revision range, e.g. HEAD or main..HEAD")
   .option("--label <label>", "badge label", "🕯️ wick")
   .option("--svg", "emit a self-hosted SVG instead of endpoint JSON (works on private repos)")
-  .action((range: string | undefined, opts: { label: string; svg?: boolean }) => {
-    const report = buildReport(process.cwd(), range);
+  .action(async (range: string | undefined, opts: { label: string; svg?: boolean }) => {
+    const report = await buildReport(process.cwd(), range);
     const badge = buildBadge(report, opts.label);
     console.log(opts.svg ? renderBadgeSvg(badge) : JSON.stringify(badge));
   });

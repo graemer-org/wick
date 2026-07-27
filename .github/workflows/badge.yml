@@ -32,16 +32,28 @@ jobs:
           npm ci
           npm run build
 
-      - name: Fetch wick notes
-        run: git fetch origin '+refs/notes/wick:refs/notes/wick' || echo "no wick notes on origin yet"
+      - name: Fetch wick notes and rollup
+        run: |
+          # The rollup is the precomputed cost aggregate; fetching it keeps the
+          # badge build O(Δ) instead of re-folding full history on every run.
+          git fetch origin '+refs/notes/wick:refs/notes/wick' || echo "no wick notes on origin yet"
+          git fetch origin '+refs/wick/rollup:refs/wick/rollup' || echo "no wick rollup on origin yet"
 
       - name: Generate badge
         run: |
           # SVG for the README (served authenticated, so it works on private
           # repos); endpoint JSON alongside for shields.io on public repos.
+          # `wick badge` also brings the rollup up to date for HEAD.
           node dist/cli.js badge --svg HEAD > /tmp/wick-badge.svg
           node dist/cli.js badge HEAD > /tmp/wick-badge.json
           cat /tmp/wick-badge.json
+
+      - name: Push updated rollup
+        run: |
+          # Publish the refreshed aggregate so the next run (and fresh checkouts
+          # elsewhere) read it instead of rebuilding cold. Force is safe: it is
+          # a derived cache, validated against (HEAD, notes) on read.
+          git push --force origin refs/wick/rollup || echo "no local rollup to push"
 
       - name: Publish to wick-badge branch
         run: |
