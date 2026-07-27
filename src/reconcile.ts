@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mergeNotes, type NoteData } from "./attribution.js";
-import { readNote, remapNotes, writeNote } from "./notes.js";
+import { readAllNotes, remapNotes, writeNote } from "./notes.js";
 import { tryGit } from "./git.js";
 
 /**
@@ -24,10 +24,13 @@ export function consolidateNotes(
   sourceShas: string[],
   onto: string,
 ): ReconcileResult {
-  if (readNote(onto, cwd)) return "target-already-stamped";
+  // One batched read of the whole ref instead of a `git notes show` per source
+  // commit — the reconcile job runs over a squash/rebase PR's full range (#39).
+  const notes = readAllNotes(cwd);
+  if (notes.has(onto)) return "target-already-stamped";
   let merged: NoteData | null = null;
   for (const sha of sourceShas) {
-    const note = readNote(sha, cwd);
+    const note = notes.get(sha);
     if (note) merged = merged ? mergeNotes(merged, note) : note;
   }
   if (!merged) return "no-source-notes";
