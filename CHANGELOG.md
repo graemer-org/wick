@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.7.0](https://github.com/graemer-org/wick/compare/v0.6.0...v0.7.0) (2026-07-27)
+
+
+### Features
+
+* capture AI cost for GitHub Actions runs ([#34](https://github.com/graemer-org/wick/issues/34)) ([9259e1d](https://github.com/graemer-org/wick/commit/9259e1da660d53c4c60fbada28365a601542cbf6))
+* merge report and no-commit comments into one PR cost comment ([#51](https://github.com/graemer-org/wick/issues/51)) ([32bdc0a](https://github.com/graemer-org/wick/commit/32bdc0a8815575d66d2f5a681793c4e9256803c5))
+* richer no-commit CI cost comment aligned with the report comment ([#44](https://github.com/graemer-org/wick/issues/44)) ([6c85cb8](https://github.com/graemer-org/wick/commit/6c85cb87fba0c650ed5a509fef1e8a7c59fe15f1))
+* skip unchanged transcripts and prune stale baselines ([#38](https://github.com/graemer-org/wick/issues/38)) ([#52](https://github.com/graemer-org/wick/issues/52)) ([0a0d9ae](https://github.com/graemer-org/wick/commit/0a0d9ae7cb91c4d480429a4665d3aec72b319c51))
+
+
+### Bug Fixes
+
+* detect squash/rebase merge shape by patch-id, immune to base drift ([#47](https://github.com/graemer-org/wick/issues/47)) ([#49](https://github.com/graemer-org/wick/issues/49)) ([c238fd8](https://github.com/graemer-org/wick/commit/c238fd8175cecce2019339be6ba7b07d1468cdf4))
+* fail on an unresolvable revision range instead of an empty report ([#38](https://github.com/graemer-org/wick/issues/38)) ([#53](https://github.com/graemer-org/wick/issues/53)) ([c505f1f](https://github.com/graemer-org/wick/commit/c505f1f0135bd8f7720357f06bf3e53e1418b6bc))
+* label issues via GitHub MCP tool instead of sandboxed Bash ([#45](https://github.com/graemer-org/wick/issues/45)) ([2286d26](https://github.com/graemer-org/wick/commit/2286d2667f032f1e2064f7b3ca0cd9778d798f58)), closes [#40](https://github.com/graemer-org/wick/issues/40)
+* make issue triage actually post its comment and labels ([#31](https://github.com/graemer-org/wick/issues/31)) ([6effa14](https://github.com/graemer-org/wick/commit/6effa142b39f00779b9b6b09f26c3f98dc3e8713))
+* record [@claude](https://github.com/claude) base-sha from the PR head, not the checkout HEAD ([#46](https://github.com/graemer-org/wick/issues/46)) ([9ab4455](https://github.com/graemer-org/wick/commit/9ab44556c16a689326075a3580535cf482e56677))
+* three correctness bugs in pricing, report totals, and reconcile push ([#42](https://github.com/graemer-org/wick/issues/42)) ([f86c3c1](https://github.com/graemer-org/wick/commit/f86c3c1b637bf85cabee426b68e097dca705a817))
+
+
+### Performance Improvements
+
+* batch note reads into two git spawns ([#39](https://github.com/graemer-org/wick/issues/39)) ([#57](https://github.com/graemer-org/wick/issues/57)) ([09d1c25](https://github.com/graemer-org/wick/commit/09d1c25c7a9f2b546714610b7c12ccedfa07aad0))
+* serve full-history reports from an incremental rollup ([#39](https://github.com/graemer-org/wick/issues/39)) ([#58](https://github.com/graemer-org/wick/issues/58)) ([f59704f](https://github.com/graemer-org/wick/commit/f59704fe7bd925980b21c75a2f9d9999d1dcd86b))
+
 ## [0.6.0](https://github.com/graemer-org/wick/compare/v0.5.0...v0.6.0) (2026-07-20)
 
 
