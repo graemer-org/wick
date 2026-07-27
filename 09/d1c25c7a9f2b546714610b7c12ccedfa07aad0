@@ -1,0 +1,1 @@
+{"v":1,"sessions":[{"id":"2bd78bc1-7504-4e71-b08b-545e1dcfec10","provider":"claude-code","model":"claude-opus-4-8","input":42,"cacheRead":1597357,"cacheWrite":72005,"output":15329},{"id":"8b4706f9-ee1d-4545-8107-46893edf1831","provider":"claude-code","model":"claude-opus-4-8","input":33,"cacheRead":757145,"cacheWrite":34703,"output":10303}]}
